@@ -1,6 +1,6 @@
 # Contributing to Query Sandbox (DQS)
 
-First off, thank you for considering contributing to DQS — it means a lot. This project only gets better with more hands on it, and we'd love yours.
+First off, thank you for considering contributing to Query Profiler, it means a lot. This project only gets better with more hands on it, and we'd love yours.
 
 This guide covers everything you need to go from "I want to help" to your first merged PR.
 
