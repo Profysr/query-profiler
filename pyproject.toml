@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "django-query-sandbox"
+version = "0.1.0"
+description = "Isolated query profiling and mock-data sandbox for Django REST endpoints"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "Bilal Ahmad", email = "bilal072ahmad@gmail.com" }
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: Django",
+    "Framework :: Django :: 5.2",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Testing",
+]
+
+# Core deps only — framework-agnostic (analyzer, AST query fingerprinting).
+dependencies = [
+    "sqlglot>=26.0.0",
+]
+
+[project.optional-dependencies]
+django = [
+    "django>=5.2,<5.3",
+    "djangorestframework>=3.15",
+    "model_bakery>=1.23",
+    "psycopg2-binary>=2.9",
+]
+
+dev = [
+    "pytest>=8.3",
+    "pytest-django>=4.9",
+    "ruff>=0.8",
+]
+
+[tool.setuptools.packages.find]
+include = ["dqs*"]
+
+# Includes HTML dashboard templates in package builds
+[tool.setuptools.package-data]
+"dqs.adapters.django" = ["templates/dqs/*.html"]
+
+# Automatically configures pytest to use the demo project settings
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "demo_project.config.settings"
+pythonpath = [".", "demo_project"]
+testpaths = ["tests"]
