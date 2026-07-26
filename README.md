@@ -1,41 +1,70 @@
-# Query Sandbox 🔍
+# Query Sandbox (DQS) 🔍
 
-> Real-time endpoint query profiling, N+1 detection, and automated ORM fix suggestions for Django & DRF.
+> The Agentic ORM Profiler & Performance Orchestrator for Django.
 
-`Query Sandbox` (DQS) is an installable Django app that inspects your project's endpoints, executes them in isolated, self-rolling-back database transactions, and detects N+1 queries using AST-based SQL fingerprinting.
+`Query Sandbox` (DQS) discovers your Django project's endpoints automatically, executes them in isolated, self-rolling-back transactions, and detects N+1 queries using AST-based SQL fingerprinting — then hands the result to an AI coding agent (or a human) as a prescriptive, copy-pasteable ORM fix.
+
+> ⚠️ **Note on scope:** this README reflects an active pivot from an earlier dashboard-first design toward an agent-first (MCP) design. If you're looking for the previous plain server-rendered dashboard direction, that's now a v1.0.0 optional feature rather than the core v0.4.0 deliverable — see [Roadmap](#project-status--roadmap).
 
 ---
 
 ## Table of Contents
 
+- [Why DQS](#why-dqs)
+- [How DQS Compares](#how-dqs-compares)
 - [Key Features](#key-features)
-- [How It Works](#how-it-works-from-query-to-fix-suggestion)
+- [How It Works: From Query to Fix Suggestion](#how-it-works-from-query-to-fix-suggestion)
+- [Dynamic Route Resolution](#dynamic-route-resolution)
+- [The Agentic Loop (MCP)](#the-agentic-loop-mcp)
 - [Architecture](#architecture)
 - [Requirements](#requirements)
 - [Quickstart](#quickstart-development-environment)
 - [Running Tests](#running-tests)
-- [Project Status](#project-status)
+- [Project Status & Roadmap](#project-status--roadmap)
 - [Contributing](#contributing)
+
+---
+
+## Why DQS
+
+Traditional profilers (Django Silk, Django Debug Toolbar) are reactive and human-dependent — you have to click through your app to generate traffic, then manually read through logged SQL to spot a bottleneck. DQS flips that:
+
+1. **Proactive discovery** — scans your Django URL tree automatically. No manual clicking required to generate the endpoint list.
+2. **Zero DB footprint** — every profiling run happens inside a `transaction.atomic()` savepoint and rolls back immediately after. Nothing persists.
+3. **Prescriptive fixes** — uses `sqlglot` AST parsing to normalize queries and output the exact `.select_related()` / `.prefetch_related()` call to add, not just a raw query dump.
+4. **Agent-first** — exposes an MCP server so AI coding agents (Claude, Cursor, Windsurf) can autonomously profile an endpoint, detect N+1s, rewrite the view, and re-verify the fix in a closed loop.
+
+---
+
+## How DQS Compares
+
+| Feature | Django Silk | DQS |
+|---|---|---|
+| Discovery | Passive — only logs URLs you physically hit | Active — scans the URL tree automatically |
+| Database overhead | High — persists request/response logs to your DB | Zero — runs entirely via rollback |
+| N+1 detection | Manual inspection of logged SQL | Automated AST fingerprinting (`sqlglot`) |
+| Output | Raw SQL + timing | Prescriptive ORM fix + enriched metrics |
+| CI/automation | Difficult to run headlessly | Built for CLI, pytest, and agent workflows |
+| AI agent integration | None | Native MCP server (stdio / SSE) |
 
 ---
 
 ## Key Features
 
-- **Zero-trace sandbox** — profiles queries inside `transaction.atomic()` savepoints and rolls them back automatically. No persistent database changes, no separate test database needed.
-- **AST-based fingerprinting** — uses `sqlglot` to parse SQL into an AST, strip literals, normalize table aliases, and collapse `IN (...)` clauses of any length into one shape — instead of fragile regex matching.
-- **Smart mock data generation** — uses `model_bakery` to auto-populate models (including foreign keys), with an interactive recovery prompt when a field's custom validation can't be auto-generated.
-- **Actionable fix suggestions** — flags queries repeated 3+ times with the same fingerprint and suggests the exact `.select_related()` / `.prefetch_related()` fix.
-- **Extensible by design** — a framework-agnostic core (`dqs/core/`) is fully decoupled from framework-specific code (`dqs/adapters/django/`), so support for other frameworks can be added without touching the core analysis engine.
+- **Zero-trace sandbox** — profiles queries inside `transaction.atomic()` savepoints, rolled back automatically after every run.
+- **AST-based fingerprinting** — `sqlglot` parses SQL into an AST, strips literals, normalizes table aliases, and collapses `IN (...)` clauses of any length into one shape.
+- **Dynamic route resolution** — profiles routes with path converters (`/books/<int:pk>/`) by generating a real mock row and substituting a concrete value automatically.
+- **Actionable fix suggestions** — flags queries repeated 3+ times with the same fingerprint and suggests the exact ORM fix.
+- **Agentic MCP server** — lets an AI IDE agent call `list_django_routes`, `profile_endpoint`, and `seed_mock_data` directly, closing the loop from detection to fix to re-verification without a human in the middle.
+- **Extensible by design** — a framework-agnostic core (`dqs/core/`) stays fully decoupled from Django-specific code (`dqs/adapters/django/`).
 
 ---
 
 ## How It Works: From Query to Fix Suggestion
 
-### Example 1 — Classic Foreign Key N+1
+### Example — Classic Foreign Key N+1
 
 **1. The unoptimized view**
-
-A view loops over books and accesses each book's related author:
 
 ```python
 # sample_app/views.py
@@ -54,92 +83,77 @@ def list_books(request):
 **2. The raw SQL Django actually runs**
 
 ```sql
--- Query #1: fetch all books
-SELECT "id", "title", "author_id"
-FROM "sample_app_book";
-
--- Query #2 (Book 1 -> Author 10)
-SELECT "id", "name"
-FROM "sample_app_author" WHERE "id" = 10;
-
--- Query #3 (Book 2 -> Author 25)
-SELECT "id", "name"
-FROM "sample_app_author" WHERE "id" = 25;
-
--- Query #4 (Book 3 -> Author 42)
-SELECT "id", "name"
-FROM "sample_app_author" WHERE "id" = 42;
+SELECT "id", "title", "author_id" FROM "sample_app_book";
+SELECT "id", "name" FROM "sample_app_author" WHERE "id" = 10;
+SELECT "id", "name" FROM "sample_app_author" WHERE "id" = 25;
+SELECT "id", "name" FROM "sample_app_author" WHERE "id" = 42;
 ```
 
-> **Note:** simplified for readability. Django's actual `CaptureQueriesContext` output table-qualifies every column (e.g. `"sample_app_author"."id"` rather than just `"id"`). if you're comparing this to real output, expect the longer form. The fingerprinting logic handles both identically.
+> Simplified for readability — Django's actual `CaptureQueriesContext` output table-qualifies every column (e.g. `"sample_app_author"."id"`). The fingerprinting logic handles both forms identically.
 
 **3. DQS normalizes them to one fingerprint**
 
-`dqs.core.analyzer.fingerprint()` parses each query with `sqlglot` and replaces the changing literal (`10`, `25`, `42`) with a placeholder:
+`dqs.core.analyzer.fingerprint()` parses each query with `sqlglot`, replacing the changing literal (`10`, `25`, `42`) with a placeholder, so all three collapse to:
 
-| Raw SQL | Normalized fingerprint |
-|---|---|
-| `... WHERE "id" = 10` | `SELECT "id", "name" FROM "sample_app_author" WHERE "id" = ?` |
-| `... WHERE "id" = 25` | *(same as above)* |
-| `... WHERE "id" = 42` | *(same as above)* |
+```sql
+SELECT "id", "name" FROM "sample_app_author" WHERE "id" = ?
+```
 
 **4. DQS flags it**
-
-Because the same fingerprint ran 3+ times, DQS reports it:
 
 ```json
 {
   "fingerprint": "SELECT \"id\", \"name\" FROM \"sample_app_author\" WHERE \"id\" = ?",
   "count": 3,
-  "suggestion": "Add .select_related('author') to your QuerySet.",
-  "queries": [
-    {"sql": "SELECT ... WHERE id = 10", "time": "0.0012"},
-    {"sql": "SELECT ... WHERE id = 25", "time": "0.0011"},
-    {"sql": "SELECT ... WHERE id = 42", "time": "0.0009"}
-  ]
+  "suggestion": "Add .select_related('author') to your QuerySet."
 }
 ```
 
 **5. The fix**
 
 ```python
-# One query instead of four
 books = Book.objects.select_related('author').all()
 ```
 
+Same AST engine also collapses variable-length `IN (...)` clauses (`IN (1,2)` and `IN (1,2,3,4,5)` both fingerprint to `IN (?)`) — a naive regex-based normalizer can't do this reliably, since it has no concept of the expression's structure.
+
 ---
 
-### Example 2 — Variable-length `IN (...)` clauses
+## Dynamic Route Resolution
 
-Different requests can pass different numbers of IDs into a filter:
+Many real endpoints look like `/books/<int:pk>/hash/<uuid:hash>/`, not a bare path. DQS resolves these in three steps before it can actually call the route:
 
-```python
-# Request A — 2 IDs
-Tag.objects.filter(id__in=[1, 2])
-
-# Request B — 5 IDs
-Tag.objects.filter(id__in=[10, 20, 30, 40, 50])
+```
+1. Introspect Path Converters
+   Reads pattern.pattern.converters (Int, UUID, Slug, ...)
+        │
+        ▼
+2. Resolve Target Django Model
+   Inspects view_class.queryset.model or URL token hints
+        │
+        ▼
+3. Inject Concrete Parameters
+   Generates a temporary mock row -> substitutes real values
+   (e.g. /books/12/hash/9f2b.../)
 ```
 
-These produce SQL that a naive regex-based normalizer would treat as two *different* queries (different placeholder counts):
+If a route uses a custom converter DQS can't confidently resolve, an explicit override can be passed instead of guessing — via the MCP tool call (`path_params={"pk": 42}`) or the equivalent Python-level call, rather than DQS silently assuming a value.
 
-```sql
--- Query A
-SELECT "id", "name"
-FROM "sample_app_tag" WHERE "id" IN (1, 2);
+---
 
--- Query B
-SELECT "id", "name"
-FROM "sample_app_tag" WHERE "id" IN (10, 20, 30, 40, 50);
+## The Agentic Loop (MCP)
+
+```
+AI IDE Agent (Cursor/Claude)
+   │
+   ├─ 1. list_django_routes()            → discovers endpoints
+   ├─ 2. profile_endpoint(route, method)  → runs the sandbox, captures queries
+   ├─ 3. AST fingerprint + fix suggestion → returned as enriched JSON
+   ├─    [ Agent rewrites views.py ]
+   └─ 4. profile_endpoint(...) again      → verifies query count dropped (e.g. 50 → 2)
 ```
 
-DQS's AST-based normalizer collapses the entire `IN (...)` list to a single placeholder regardless of length, so both queries resolve to the same fingerprint:
-
-```sql
-SELECT "id", "name" FROM "sample_app_tag" WHERE "id" IN (?)
-```
-
-This is the exact gap that plain regex normalization can't close, variable-length lists need AST-level handling to group correctly.
+This closes the loop end-to-end: an agent can detect a bottleneck, apply the suggested `.select_related()`/`.prefetch_related()` fix itself, and immediately re-run the same profiling call to confirm the fix actually worked — without a human manually re-testing in a browser.
 
 ---
 
@@ -147,28 +161,29 @@ This is the exact gap that plain regex normalization can't close, variable-lengt
 
 ```
 dqs/
-├── core/              # Framework-agnostic — analyzer, dashboard. Never imports Django.
-│   ├── analyzer.py    # fingerprinting + N+1 detection
-│   └── dashboard/      # views, urls, templates
-└── adapters/
-    └── django/         # All Django-specific code lives here only.
-        ├── introspector.py    # discovers routes
-        ├── runner.py          # isolated, rolled-back execution
-        └── mock_generator.py  # model_bakery wrapper + validation recovery flow
+├── core/                  # Framework-agnostic — analyzer, fingerprinting. Never imports Django.
+│   └── analyzer.py
+├── adapters/
+│   └── django/            # All Django-specific code lives here only.
+│       ├── introspector.py    # discovers routes, classifies CBV/DRF/FBV
+│       ├── runner.py          # isolated, rolled-back execution
+│       ├── converters.py      # dynamic path-param resolution
+│       └── mock_generator.py  # model_bakery wrapper + validation recovery
+└── mcp/
+    └── server.py           # MCP server exposing DQS as agent-callable tools
 
-demo_project/            # Throwaway Django project used only for local dev/testing. Not shipped as part of the package — it exists so there's somewhere to install `dqs.adapters.django` and click around while developing DQS itself.
+demo_project/                # Throwaway Django project used only for local dev/testing.
+                              # Not shipped as part of the package.
 ```
 
-**The one rule that matters most in this codebase:** `dqs/core/` never imports anything from `dqs/adapters/`. `adapters/` may import from `core/`, never the other way around. This one-way boundary is what makes a second framework adapter (FastAPI/SQLAlchemy, most likely) additive later, rather than a rewrite of the analysis engine.
-
-If you're picking up a task and unsure which folder your change belongs in, ask: *"does this code know what Django is?"* If yes → `adapters/django/`. If no → `core/`.
+**The rule that matters most:** `dqs/core/` never imports anything from `dqs/adapters/`. This one-way boundary is what lets a second framework adapter (or the MCP layer itself) build on top of the analysis engine without ever needing to modify it.
 
 ---
 
 ## Requirements
 
-- Docker & Docker Compose (v2 syntax — `docker compose`, not `docker-compose`)
-- That's it. No local Python install is needed — the dev environment runs entirely in containers, including the Django scaffolding step below.
+- Docker & Docker Compose (v2 syntax)
+- No local Python install required for development
 
 ---
 
@@ -184,7 +199,6 @@ docker compose build
 docker compose up -d db
 
 # 3. First-time only: scaffold the demo Django project
-#    (skip this if demo_project/manage.py already exists)
 docker compose run --rm web django-admin startproject demo_project .
 
 # 4. Start the full stack
@@ -193,23 +207,18 @@ docker compose up -d
 # 5. Run migrations
 docker compose exec web python manage.py migrate
 
-# 6. Create a superuser (needed for testing auth-gated endpoints)
+# 6. Create a superuser
 docker compose exec web python manage.py createsuperuser
-
-# 7. Open the dashboard
-# http://localhost:8000/dqs/
 ```
 
-**Day-to-day commands once set up:**
+**Day-to-day commands:**
 
 ```bash
 docker compose up -d           # start everything
 docker compose logs -f web     # tail app logs
 docker compose exec web bash   # shell into the running container
-docker compose down            # stop everything (add -v to also wipe the DB volume)
+docker compose down            # stop everything (-v also wipes the DB volume)
 ```
-
-The `web` service mounts the repo as a volume, so editing any `.py` file in `dqs/` or `demo_project/` on your host reflects immediately in the container — no rebuild needed unless you change a dependency in `pyproject.toml`.
 
 ---
 
@@ -219,33 +228,33 @@ The `web` service mounts the repo as a volume, so editing any `.py` file in `dqs
 docker compose run --rm web pytest
 ```
 
-Tests live in `tests/`, mirroring the structure of `dqs/`:
-
 ```
 tests/
-├── test_analyzer.py       # tests dqs/core/analyzer.py — pure functions, no Django needed
-├── test_introspector.py   # tests dqs/adapters/django/introspector.py
-└── test_runner.py         # tests dqs/adapters/django/runner.py — needs the demo_project DB
+├── test_analyzer.py       # dqs/core/analyzer.py — pure functions, no Django needed
+├── test_introspector.py   # dqs/adapters/django/introspector.py
+└── test_runner.py         # dqs/adapters/django/runner.py — needs the demo_project DB
 ```
-
-If you're adding fingerprinting logic, `test_analyzer.py` is the fastest feedback loop — it has no Django dependency and doesn't need the database running.
 
 ---
 
-## Project Status
+## Project Status & Roadmap
 
-DQS is under active early development. See:
+| Phase | Description | Status |
+|---|---|---|
+| v0.1.0 | Infra Scaffolding & Core AST Analyzer | ✅ Completed |
+| v0.2.0 | Django Introspector & Isolated Sandbox Execution | 🟡 In Progress |
+| v0.3.0 | Dynamic Path Converter Engine & Mock Data Generator | 🔲 Planned |
+| v0.4.0 | Model Context Protocol (MCP) Server & Agentic Loop | 🔲 Planned |
+| v1.0.0 | Terminal CLI Linter & Interactive Dashboard (optional) | 🔲 Future |
 
-- **[`ROADMAP.md`](./ROADMAP.md)** — what's built, what's next, and which files each version touches.
-- **[`CHANGELOG.md`](./CHANGELOG.md)** — the reasoning behind each architectural decision made so far. Worth reading before touching `core/analyzer.py` or the adapter boundary — several non-obvious tradeoffs (why `model_bakery` over `factory_boy`, why no ABCs yet, why `sqlglot` over regex) are explained there.
+Full detail, file-by-file, lives in [`ROADMAP.md`](./ROADMAP.md). The reasoning behind each architectural decision — including why certain things were deliberately left out of earlier versions — lives in [`CHANGELOG.md`](./CHANGELOG.md).
 
 ---
 
 ## Contributing
 
-1. Check `ROADMAP.md` for the current version in progress — that's the active scope.
-2. Respect the `core`/`adapters` boundary described in [Architecture](#architecture) above. A PR that imports Django inside `dqs/core/` will be asked to move that code.
-3. New fingerprinting edge cases (subqueries, `OR`-clause handling, etc.) are welcome, but check the "punted to v2" notes in `CHANGELOG.md` first — some are deliberate scope cuts, not oversights.
-4. Run `pytest` before opening a PR. `test_analyzer.py` should stay Django-free — if a test there suddenly needs Django, that's a signal something leaked across the boundary.
+See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for setup steps, coding standards, and the PR process. The short version: respect the `core`/`adapters` boundary, run `pytest` before opening a PR, and check `ROADMAP.md`/`CHANGELOG.md` before touching fingerprinting logic or adding a new adapter.
 
----
+## License
+
+MIT — see [`LICENSE`](./LICENSE). 

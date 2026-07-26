@@ -41,16 +41,13 @@ class DjangoSandboxRunner:
     ) -> dict[str, Any]:
         """Runs the target view function inside a rolling-back transaction and captures queries."""
 
-        # 1. Hard production guardrail. Belt-and-suspenders alongside the
-        # DEBUG-only URL mounting — this way even a misconfigured urls.py
-        # inclusion can't accidentally run sandbox code in production.
+        # 1. Hard production guardrail.
         if not getattr(settings, "DEBUG", False):
             raise PermissionDenied(
                 "DQS Sandbox execution is strictly disabled when DEBUG=False."
             )
 
-        # 2. Strict method whitelist — fails with a clear ValueError instead
-        # of a confusing AttributeError from getattr(factory, ...) on a typo.
+        # 2. Strict method whitelist.
         http_method = method.lower()
         if http_method not in self.ALLOWED_METHODS:
             raise ValueError(
@@ -59,8 +56,7 @@ class DjangoSandboxRunner:
 
         warnings = self._detect_side_effects(view_func)
 
-        # 3. Wrap execution in a transaction savepoint so it can be undone
-        # regardless of whether the view succeeds, errors, or raises.
+        # 3. Wrap execution in a transaction savepoint.
         with transaction.atomic():
             sid = transaction.savepoint()
             try:
@@ -71,23 +67,9 @@ class DjangoSandboxRunner:
                     path, data=data or {}, content_type="application/json"
                 )
 
-                # Direct auth bypass (dev sandbox only) — RequestFactory builds
-                # a bare WSGIRequest, so no middleware runs unless invoked;
-                # attaching request.user directly skips the auth chain entirely
-                # rather than needing to mock a JWT/session.
                 if user is not None:
                     request.user = user
 
-                # 4. Capture SQL queries, gracefully handling view exceptions
-                # so a buggy endpoint reports as "this endpoint errored"
-                # instead of crashing the whole sandbox call.
-                #
-                # NOTE: Http404/PermissionDenied raised inside a plain Django
-                # view will show up here as an "exception," not a 404/403 —
-                # we call view_func directly, bypassing Django's
-                # exception-to-response middleware. DRF views are unaffected
-                # since DRF's own dispatch() already converts these to a
-                # proper Response before returning.
                 ctx = None
                 status_code = 500
                 try:
@@ -115,15 +97,17 @@ class DjangoSandboxRunner:
                     "warnings": warnings,
                 }
             finally:
-                # Guaranteed rollback — runs whether the view succeeded,
-                # errored, or the block returned early.
+                # Guaranteed rollback
                 transaction.savepoint_rollback(sid)
 
     def _detect_side_effects(self, view_func: Any) -> list[str]:
         """Greps view source code for unhandled external side effects."""
         warnings: list[str] = []
         try:
-            target = getattr(view_func, "cls", view_func)
+            # Check view_class (Django standard), cls (DRF standard), or fallback to view_func
+            target = getattr(
+                view_func, "view_class", getattr(view_func, "cls", view_func)
+            )
             source = inspect.getsource(target)
 
             for pattern in self.SIDE_EFFECT_PATTERNS:
@@ -133,8 +117,6 @@ class DjangoSandboxRunner:
                         "DB writes will roll back, but external side effects will not."
                     )
         except (TypeError, OSError):
-            # Source unavailable (e.g. built-ins, C-implemented callables) —
-            # skip quietly rather than failing the whole sandbox run over it.
             pass
 
         return warnings
