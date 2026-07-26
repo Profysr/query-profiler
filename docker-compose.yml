@@ -26,8 +26,6 @@ services:
     env_file:
       - .env
     environment:
-      POSTGRES_HOST: db
-      POSTGRES_PORT: 5432
       DJANGO_SETTINGS_MODULE: demos.django.demo_project.config.settings
     depends_on:
       db:

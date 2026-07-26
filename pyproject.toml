@@ -53,7 +53,7 @@ include = ["dqs*"]
 
 # Automatically configures pytest to use the demo project settings
 [tool.pytest.ini_options]
-pythonpath = [".", "demos/django"]
+pythonpath = ["."]
 testpaths = ["tests"]
 
 # Register custom markers to categorize our test suite

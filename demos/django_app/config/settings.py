@@ -17,14 +17,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 
 # Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
-
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-t7qx%)h3)=3zsz6#^*wg+h2e3!0#n3zmo$*$ukrdxt1rv!kn7&'
+SECRET_KEY = os.environ.get("SECRET_KEY", 'django-insecure-t7qx%)h3)=3zsz6#^*wg+h2e3!0#n3zmo$*$ukrdxt1rv!kn7&')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
-
+DEBUG = os.environ.get("DEBUG", "True") == "True"
 ALLOWED_HOSTS = []
 
 
@@ -37,6 +33,12 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+
+    # Third-Party Apps
+    "rest_framework",
+    # DQS Adapter & Sandbox Target App
+    "dqs.adapters.django",
+    "sample_app",
 ]
 
 MIDDLEWARE = [
@@ -72,17 +74,27 @@ WSGI_APPLICATION = 'config.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
+# DATABASES = {
+#     'default': {
+#         'ENGINE': 'django.db.backends.sqlite3',
+#         'NAME': BASE_DIR / 'db.sqlite3',
+#     }
+# }
+
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+    "default": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": os.environ.get("POSTGRES_DB", "dqs"),
+        "USER": os.environ.get("POSTGRES_USER", "dqs"),
+        "PASSWORD": os.environ.get("POSTGRES_PASSWORD", "dqs"),
+        "HOST": os.environ.get("POSTGRES_HOST", "db"),
+        "PORT": os.environ.get("POSTGRES_PORT", "5432"),
     }
 }
 
 
 # Password validation
 # https://docs.djangoproject.com/en/6.0/ref/settings/#auth-password-validators
-
 AUTH_PASSWORD_VALIDATORS = [
     {
         'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',

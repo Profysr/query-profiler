@@ -1,122 +1,106 @@
+# dqs/adapters/django/runner.py
+import time
 import inspect
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional
 from django.conf import settings
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import ImproperlyConfigured
 from django.db import connection, transaction
 from django.test import RequestFactory
 from django.test.utils import CaptureQueriesContext
 
+@dataclass
+class ExecutionResult:
+    route: str
+    status_code: int
+    metrics: Dict[str, Any] = field(default_factory=dict)
+    queries: List[Dict[str, Any]] = field(default_factory=list)
+    error: Optional[str] = None
+    side_effect_warnings: List[str] = field(default_factory=list)
+
 
 class DjangoSandboxRunner:
-    """Executes endpoint requests in a zero-migration, rolling-back transaction sandbox."""
-
-    ALLOWED_METHODS: set[str] = {
-        "get",
-        "post",
-        "put",
-        "patch",
-        "delete",
-        "head",
-        "options",
-    }
-
-    # Things a database rollback CANNOT undo — flagged, not blocked.
-    SIDE_EFFECT_PATTERNS: list[str] = [
-        "requests.",
-        "httpx.",
-        "smtplib",
-        "send_mail",
-        ".delay(",
-        ".apply_async(",
-        "group_send(",
-    ]
-
-    def execute_isolated(
-        self,
-        view_func: Any,
-        method: str = "GET",
-        path: str = "/",
-        user: Any = None,
-        data: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """Runs the target view function inside a rolling-back transaction and captures queries."""
-
-        # 1. Hard production guardrail.
+    def __init__(self):
+        # Security Guardrail: Refuse to execute if DEBUG is disabled
         if not getattr(settings, "DEBUG", False):
-            raise PermissionDenied(
-                "DQS Sandbox execution is strictly disabled when DEBUG=False."
-            )
+            raise ImproperlyConfigured("DjangoSandboxRunner requires DEBUG=True for safety.")
+        self.factory = RequestFactory()
 
-        # 2. Strict method whitelist.
-        http_method = method.lower()
-        if http_method not in self.ALLOWED_METHODS:
-            raise ValueError(
-                f"Invalid HTTP method '{method}'. Allowed methods: {sorted(self.ALLOWED_METHODS)}"
-            )
+    def execute_isolated(self, path: str, method: str = "GET", data: Optional[dict] = None) -> ExecutionResult:
+        """
+        Executes a route inside an atomic database transaction savepoint that is 
+        instantly rolled back. Captures all SQL queries, execution time, and status codes.
+        """
+        method = method.upper()
+        if method not in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
+            return ExecutionResult(route=path, status_code=400, error=f"Invalid HTTP method: {method}")
 
-        warnings = self._detect_side_effects(view_func)
-
-        # 3. Wrap execution in a transaction savepoint.
-        with transaction.atomic():
-            sid = transaction.savepoint()
-            try:
-                factory = RequestFactory()
-                request_builder = getattr(factory, http_method)
-
-                request = request_builder(
-                    path, data=data or {}, content_type="application/json"
-                )
-
-                if user is not None:
-                    request.user = user
-
-                ctx = None
-                status_code = 500
-                try:
-                    with CaptureQueriesContext(connection) as ctx:
-                        response = view_func(request)
-                        status_code = getattr(response, "status_code", 200)
-                except Exception as exc:
-                    warnings.append(
-                        f"View execution raised an exception: {type(exc).__name__}: {exc}"
-                    )
-
-                captured_queries = (
-                    [
-                        {"sql": q["sql"], "time": float(q["time"])}
-                        for q in ctx.captured_queries
-                    ]
-                    if ctx is not None
-                    else []
-                )
-
-                return {
-                    "status_code": status_code,
-                    "queries": captured_queries,
-                    "query_count": len(captured_queries),
-                    "warnings": warnings,
-                }
-            finally:
-                # Guaranteed rollback
-                transaction.savepoint_rollback(sid)
-
-    def _detect_side_effects(self, view_func: Any) -> list[str]:
-        """Greps view source code for unhandled external side effects."""
-        warnings: list[str] = []
+        # Step 1: Resolve the view handler from the URL resolver
+        from django.urls import resolve
         try:
-            # Check view_class (Django standard), cls (DRF standard), or fallback to view_func
-            target = getattr(
-                view_func, "view_class", getattr(view_func, "cls", view_func)
+            resolved_match = resolve(path)
+        except Exception as e:
+            return ExecutionResult(route=path, status_code=404, error=f"Route resolution failed: {str(e)}")
+
+        # Step 2: Build the WSGI request object
+        request_func = getattr(self.factory, method.lower(), None)
+        if not request_func:
+            return ExecutionResult(route=path, status_code=405, error=f"Unsupported method request generator: {method}")
+
+        request = request_func(path, data or {})
+        
+        # Security: Bypass authentication middleware constraints for sandbox testing
+        from django.contrib.auth.models import AnonymousUser
+        request.user = AnonymousUser()
+
+        # Step 3: Run inside an isolated rolling-back database transaction
+        queries_captured = []
+        status_code = 500
+        start_time = time.perf_counter()
+        db_start_time = 0.0
+        db_duration = 0.0
+
+        sid = transaction.savepoint()
+        try:
+            with CaptureQueriesContext(connection) as cqc:
+                db_start = time.perf_counter()
+                
+                # Execute the view callback directly
+                response = resolved_match.func(request, *resolved_match.args, **resolved_match.kwargs)
+                
+                db_duration = (time.perf_counter() - db_start) * 1000.0
+                queries_captured = cqc.captured_queries
+                status_code = getattr(response, "status_code", 200)
+
+        except Exception as e:
+            status_code = 500
+            return ExecutionResult(
+                route=path,
+                status_code=status_code,
+                error=f"Exception raised inside view execution: {str(e)}"
             )
-            source = inspect.getsource(target)
+        finally:
+            # Absolute Guarantee: Roll back all database modifications immediately
+            transaction.savepoint_rollback(sid)
 
-            for pattern in self.SIDE_EFFECT_PATTERNS:
-                if pattern in source:
-                    warnings.append(
-                        f"Potential side-effect detected ('{pattern}'). "
-                        "DB writes will roll back, but external side effects will not."
-                    )
-        except (TypeError, OSError):
-            pass
+        total_duration = (time.perf_counter() - start_time) * 1000.0
 
-        return warnings
+        # Step 4: Format the enriched execution metrics payload required by v0.4.0 (MCP Agent)
+        metrics = {
+            "total_time_ms": round(total_duration, 2),
+            "db_time_ms": round(db_duration, 2),
+            "total_queries": len(queries_captured),
+            "unique_fingerprints": len(set(q["sql"] for q in queries_captured)),
+        }
+
+        formatted_queries = [
+            {"sql": q["sql"], "time_ms": float(q["time"])} 
+            for q in queries_captured
+        ]
+
+        return ExecutionResult(
+            route=path,
+            status_code=status_code,
+            metrics=metrics,
+            queries=formatted_queries,
+        )

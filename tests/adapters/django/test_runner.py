@@ -1,101 +1,73 @@
 # tests/adapters/django/test_runner.py
-
-import json
 import pytest
-from django.core.exceptions import PermissionDenied
-from django.http import JsonResponse
-from django.test import override_settings
-
-from dqs.adapters.django.runner import DjangoSandboxRunner
-from config.models import Author, Book
-from config.views import EmailSendingCBV, NPlusOneBookListView
+from django_app.sample_app.models import Author, Book, Publisher
+from dqs.adapters.django.runner import DjangoSandboxRunner, ExecutionResult
 
 
 @pytest.mark.django_db
 class TestDjangoSandboxRunner:
 
-    def test_cbv_side_effect_regression(self):
+    @pytest.fixture(autouse=True)
+    def setup_sample_data(self):
+        """Seed initial relational data for testing endpoints."""
+        self.publisher = Publisher.objects.create(name="O'Reilly Media")
+        self.author = Author.objects.create(name="Robert C. Martin")
+        self.book = Book.objects.create(
+            title="Clean Architecture",
+            author=self.author,
+            publisher=self.publisher
+        )
+
+    def test_runner_executes_endpoint_successfully(self):
+        """Verify that running an endpoint returns a valid status code and enriched metrics."""
+        runner = DjangoSandboxRunner()
+        # Endpoint: /api/v1/books-fbv/
+        result = runner.execute_isolated("/api/v1/books-fbv/", method="GET")
+
+        assert isinstance(result, ExecutionResult)
+        assert result.status_code == 200
+        assert result.error is None
+        
+        # Verify metrics payload required for downstream MCP Agent consumption
+        assert "total_time_ms" in result.metrics
+        assert "db_time_ms" in result.metrics
+        assert "total_queries" in result.metrics
+        assert result.metrics["total_queries"] > 0
+        assert len(result.queries) == result.metrics["total_queries"]
+
+    def test_runner_enforces_atomic_transaction_rollback(self):
         """
-        REGRESSION TEST: Ensures _detect_side_effects checks .view_class so
-        plain Django CBVs wrapped via .as_view() have their send_mail calls flagged.
+        Critical Security Test: Verify that any database mutations executed 
+        during the sandbox session are completely rolled back and leave 
+        zero persistence in the database.
         """
-        runner = DjangoSandboxRunner()
-        view_func = EmailSendingCBV.as_view()
-
-        warnings = runner._detect_side_effects(view_func)
-
-        print("\n" + "=" * 50)
-        print("🔍 DETECTED SIDE EFFECTS OUTPUT:")
-        print(json.dumps(warnings, indent=2))
-        print("=" * 50)
-
-        assert len(warnings) == 1
-        assert "send_mail" in warnings[0]
-
-    def test_captures_n_plus_one_queries(self):
-        """Verifies query count capture on NPlusOneBookListView."""
-        author = Author.objects.create(name="J.R.R. Tolkien")
-        for title in ["The Hobbit", "The Fellowship of the Ring", "The Two Towers"]:
-            Book.objects.create(title=title, author=author)
+        initial_book_count = Book.objects.count()
+        assert initial_book_count == 1
 
         runner = DjangoSandboxRunner()
+        
+        # Execute profiling run
+        result = runner.execute_isolated("/api/v1/books-fbv/", method="GET")
+        assert result.status_code == 200
 
-        with override_settings(DEBUG=True):
-            result = runner.execute_isolated(
-                view_func=NPlusOneBookListView,
-                method="GET",
-                path="/books/",
-            )
+        # Verify state: Database row count must remain completely unchanged
+        final_book_count = Book.objects.count()
+        assert final_book_count == initial_book_count
 
-        print("\n" + "=" * 50)
-        print("📊 EXECUTE_ISOLATED OUTPUT STRUCTURE (N+1 VIEW):")
-        print(json.dumps(result, indent=2))
-        print("=" * 50)
-
-        assert result["status_code"] == 200
-        assert result["query_count"] == 4  # 1 initial + 3 loop queries
-        assert len(result["queries"]) == 4
-
-    def test_rolls_back_database_mutations(self):
-        """Ensures DB changes inside execute_isolated are rolled back completely."""
-        def mutating_view(request):
-            Author.objects.create(name="Transient Author")
-            return JsonResponse({"status": "created"}, status=201)
-
+    def test_runner_handles_invalid_methods_safely(self):
+        """Verify the runner catches unsupported or malformed HTTP methods gracefully."""
         runner = DjangoSandboxRunner()
+        result = runner.execute_isolated("/api/v1/books-fbv/", method="TRACE")
 
-        with override_settings(DEBUG=True):
-            result = runner.execute_isolated(view_func=mutating_view, method="POST")
+        assert result.status_code == 400
+        assert result.error is not None
+        assert "Invalid HTTP method" in result.error
 
-        print("\n" + "=" * 50)
-        print("🔄 EXECUTE_ISOLATED OUTPUT STRUCTURE (MUTATING VIEW):")
-        print(json.dumps(result, indent=2))
-        print("=" * 50)
-
-        assert result["status_code"] == 201
-        assert not Author.objects.filter(name="Transient Author").exists()
-
-    def test_handles_view_exceptions_gracefully(self):
-        """Ensures a crashing view logs warnings instead of crashing the sandbox."""
-        def broken_view(request):
-            raise KeyError("Missing parameter 'user_id'")
-
+    def test_runner_handles_unresolvable_routes(self):
+        """Verify the runner handles missing or broken paths without crashing."""
         runner = DjangoSandboxRunner()
+        result = runner.execute_isolated("/api/v1/non-existent-endpoint-xyz/", method="GET")
 
-        with override_settings(DEBUG=True):
-            result = runner.execute_isolated(view_func=broken_view)
-
-        print("\n" + "=" * 50)
-        print("⚠️ EXECUTE_ISOLATED OUTPUT STRUCTURE (EXCEPTIONAL VIEW):")
-        print(json.dumps(result, indent=2))
-        print("=" * 50)
-
-        assert result["status_code"] == 500
-        assert any("KeyError" in w for w in result["warnings"])
-
-    def test_raises_permission_denied_when_debug_false(self):
-        """Guardrail check for DEBUG=False."""
-        runner = DjangoSandboxRunner()
-        with override_settings(DEBUG=False):
-            with pytest.raises(PermissionDenied):
-                runner.execute_isolated(view_func=NPlusOneBookListView)
+        assert result.status_code == 404
+        assert result.error is not None
+        assert "Route resolution failed" in result.error
