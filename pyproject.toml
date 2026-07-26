@@ -53,6 +53,12 @@ include = ["dqs*"]
 
 # Automatically configures pytest to use the demo project settings
 [tool.pytest.ini_options]
-DJANGO_SETTINGS_MODULE = "demo_project.config.settings"
-pythonpath = [".", "demo_project"]
+pythonpath = [".", "demos/django"]
 testpaths = ["tests"]
+
+# Register custom markers to categorize our test suite
+markers = [
+    "core: Pure framework-agnostic AST & logic tests (no DB/framework overhead)",
+    "django: Tests requiring Django settings and DB initialization",
+    "sqlalchemy: Tests requiring SQLAlchemy engine setup",
+]
