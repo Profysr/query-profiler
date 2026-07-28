@@ -1,12 +1,15 @@
-# dqs/adapters/django/apps.py
+# dqs/adapters/drf/apps.py
+from pathlib import Path
 from django.apps import AppConfig
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 
 class DQSConfig(AppConfig):
-    name = 'dqs.adapters.django'
-    label = 'dqs_django'
+    name = 'dqs.adapters.drf'
+    label = 'dqs_drf'
     verbose_name = 'DQS Agentic Profiler'
+    # Explicitly set the path to resolve the namespace package multiple locations conflict
+    path = str(Path(__file__).resolve().parent)
 
     def ready(self):
         # Hard stop: DQS must never run in production.

@@ -20,13 +20,15 @@ services:
       dockerfile: demos/drf/Dockerfile
     command: python demos/drf/manage.py runserver 0.0.0.0:8000
     volumes:
-      - .:/app          # live-reload across dqs/ core and adapter files
+      - .:/app          # Live-reload across dqs/ core and adapter files
     ports:
       - "8000:8000"
     env_file:
       - .env
-    environment:
-      DJANGO_SETTINGS_MODULE: demos.drf.demo_project.config.settings
+    working_dir: /app
+    # environment:
+      # - PYTHONPATH=/app:/app/demos/drf
+    #   DJANGO_SETTINGS_MODULE: demos.drf.config.settings
     depends_on:
       db:
         condition: service_healthy

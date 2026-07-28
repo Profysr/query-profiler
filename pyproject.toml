@@ -3,7 +3,7 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "django-query-sandbox"
+name = "profiler"
 version = "0.1.0"
 description = "Isolated query profiling and mock-data sandbox for Django REST endpoints"
 readme = "README.md"
@@ -49,11 +49,12 @@ include = ["dqs*"]
 
 # Includes HTML dashboard templates in package builds
 [tool.setuptools.package-data]
-"dqs.adapters.django" = ["templates/dqs/*.html"]
+"dqs.adapters.drf" = ["templates/dqs/*.html"]
 
 # Automatically configures pytest to use the demo project settings
 [tool.pytest.ini_options]
-pythonpath = ["."]
+django_settings_module = "config.settings"
+pythonpath = [".", "demos/drf"]
 testpaths = ["tests"]
 
 # Register custom markers to categorize our test suite
