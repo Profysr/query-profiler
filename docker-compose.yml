@@ -17,8 +17,8 @@ services:
   demo-django:
     build:
       context: .
-      dockerfile: demos/django/Dockerfile
-    command: python demos/django/manage.py runserver 0.0.0.0:8000
+      dockerfile: demos/drf/Dockerfile
+    command: python demos/drf/manage.py runserver 0.0.0.0:8000
     volumes:
       - .:/app          # live-reload across dqs/ core and adapter files
     ports:
@@ -26,7 +26,7 @@ services:
     env_file:
       - .env
     environment:
-      DJANGO_SETTINGS_MODULE: demos.django.demo_project.config.settings
+      DJANGO_SETTINGS_MODULE: demos.drf.demo_project.config.settings
     depends_on:
       db:
         condition: service_healthy
