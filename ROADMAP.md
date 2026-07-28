@@ -2,20 +2,22 @@
 
 *Source of truth for project execution. Tracks what is completed, currently under construction, and planned — and, in this section, why any of it matters.*
 
+> **Revision note (this update):** This roadmap incorporates a structural pivot agreed after v0.2.0 was mostly built: DQS moves from "discover a route → simulate a request → capture queries" to "intercept every query at the DB-driver boundary → walk the call stack to find its origin." This eliminates the need to separately discover signals, Celery tasks, and service-layer functions as distinct "kinds" of thing DQS has to know about — anything that runs, however it was triggered, gets seen. See the new **v0.25** phase below for the mechanism, and the new **`Target`** abstraction that unifies views/signals/tasks/consumers under one interface for both the human-facing UX and the MCP layer.
+
 ---
 
 ## North Star — What We're Actually Building
 
-**The one-sentence version:** DQS turns "why is this endpoint slow?" from a manual, browser-clicking investigation into something an AI coding agent (or a human) can ask, get a precise answer to, fix, and instantly re-verify — with zero risk to the developer's real database.
+**The one-sentence version:** DQS turns "why is this endpoint slow, and what else in this codebase is quietly writing bad queries or doing something risky?" from a manual, browser-clicking investigation into something an AI coding agent (or a human) can ask, get a precise answer to, fix, and instantly re-verify — with zero risk to the developer's real database.
 
 **The end state, concretely:**
 - A developer (or their AI agent) runs one command / one MCP tool call against a Django project.
-- DQS discovers every endpoint on its own — no manual registration, no clicking through the app first.
+- DQS discovers every endpoint on its own — no manual registration, no clicking through the app first — and, separately, can see every query the project issues **regardless of what triggered it**: a view, a signal receiver, a Celery task, a notification service with no URL at all.
 - It executes any endpoint — including ones with dynamic URL segments like `/books/<int:pk>/` — safely, using auto-generated mock data, entirely inside a transaction that's rolled back the instant it's done. The developer's actual database is never touched.
-- It reports back not just "here are 40 queries," but "here's the exact line causing 38 of them, and here's the one-line fix."
+- It reports back not just "here are 40 queries," but "here's the exact file and line that issued 38 of them, and here's the one-line fix" — and, independent of whether that code was even reachable through a URL, flags risky patterns (blocking external calls, missing indexes, weak PK strategy) via static analysis.
 - An AI agent can close the loop itself: detect the N+1, apply the suggested `.select_related()`, then call DQS again to confirm the query count actually dropped — without a human re-testing anything by hand.
 
-**Why this order (v0.1 → v1.0):** each phase only becomes buildable once the one before it exists. You can't safely execute an endpoint (v0.2) before you can find it (v0.1's analyzer exists independently, but the Introspector needed for discovery is v0.2). You can't profile a realistic app (v0.3) until execution works and there's data to generate. You can't offer an agent anything meaningful (v0.4) until profiling actually produces a trustworthy, structured result. The CLI/dashboard (v1.0) is deliberately last and explicitly optional — the agentic loop is the core product; a terminal command and a browser UI are convenience layers on top of it, not the other way around.
+**Why this order (v0.1 → v1.0):** each phase only becomes buildable once the one before it exists. The interceptor (v0.25) is inserted here — after basic execution works (v0.2), before mock data (v0.3) — because it changes *how* queries get captured, and every later phase (mock data profiling, MCP tool results) should be built against the final capture mechanism, not the one about to be replaced. The static AST pass and the `Target` abstraction are pulled forward alongside it because they're what let v0.4's MCP layer expose one consistent tool surface instead of a different tool per "kind" of triggerable code.
 
 **A guiding rule for whoever picks up any task below:** if you're ever unsure whether something belongs in v1 scope, ask "does this get us closer to a trustworthy, zero-risk profiling result an agent can act on?" If yes, it's in scope. If it's about polish, multi-framework support, or a nicer UI, it's very likely a "Later Release" item further down this file — check there before building it early.
 
@@ -23,10 +25,10 @@
 
 ## Why the Django/Python version floors are what they are
 
-`pyproject.toml` currently specifies `django>=4.2` and `python>=3.10`, with no upper ceiling. This is a **deliberate reach decision, not a stability one** — worth stating plainly since it's the opposite tradeoff of "pin to the newest LTS for predictability":
+`pyproject.toml` currently specifies `django>=4.2` and `python>=3.10`, with no upper ceiling. This is a **deliberate reach decision, not a stability one**:
 
 - The goal is the widest possible adoption across the existing Django community without maintaining compatibility shims for versions old enough to require special-casing.
-- 4.2/3.10 is treated as the boundary before which supporting older ORM/typing behavior would meaningfully slow down development. Everything at or after that line is fair game; anything before it is explicitly out of scope, and no one should spend time making DQS work on Django 3.x or Python 3.9.
+- 4.2/3.10 is treated as the boundary before which supporting older ORM/typing behavior would meaningfully slow down development.
 - The tradeoff being accepted: an open floor means a fresh install could resolve onto whatever the newest Django release is at install time, including one that later turns out to have breaking changes for DQS. That's accepted risk here, not an oversight — if it ever actually breaks something, that's the moment to add a ceiling, not before.
 
 ---
@@ -36,130 +38,130 @@
 | Phase | Description | Status |
 | :--- | :--- | :--- |
 | **v0.1.0** | Infra Scaffolding & Core AST Analyzer | ✅ **COMPLETED** |
-| **v0.2.0** | Django Introspector & Isolated Sandbox Execution | 🟡 **IN PROGRESS** |
-| **v0.3.0** | Dynamic Path Converter Engine & Mock Data Generator | 🔲 **PLANNED** |
-| **v0.4.0** | Model Context Protocol (MCP) Server & Agentic Loop | 🔲 **PLANNED** |
+| **v0.2.0** | Django Introspector & Isolated Sandbox Execution | 🟡 **IN PROGRESS** (execution model changing — see v0.25) |
+| **v0.25.0** | Query Interceptor, `Target` Abstraction & Static AST Advisor | 🔲 **NEW — PLANNED** |
+| **v0.3.0** | Dynamic Path Converter Engine, Mock Data Generator & Request-Body Inference | 🔲 **PLANNED** (scope expanded) |
+| **v0.4.0** | Model Context Protocol (MCP) Server & Agentic Loop | 🔲 **PLANNED** (now built on `Target`, not `RouteMetadata`) |
 | **v1.0.0** | Terminal CLI Linter & Interactive Dashboard (optional) | 🔲 **FUTURE** |
 
 ---
 
 ## v0.1.0 — Infra Scaffolding & Core AST Analyzer
 
-> Status: COMPLETED ✅
+> Status: COMPLETED ✅ — unchanged, no scope impact from this revision.
 
-**In plain words:** Build the repository scaffolding, Docker development environment, and the 100% framework-agnostic SQL AST fingerprinting and N+1 detection engine in `dqs/core/`. This is the piece every later phase depends on — it has to work correctly and in isolation before anything gets layered on top.
+- [x] `analyzer.py` — `fingerprint(sql)`, `detect_n_plus_one(queries, threshold)`, `suggest_fix(fingerprint, relationships)`.
+- [x] `test_analyzer.py` — unit tests for literal stripping, `IN` clause collapsing, alias canonicalization, threshold detection.
+- [x] Repository layout, docs, packaging spec, Docker setup.
 
-### Core (`dqs/core/`)
-- [x] `analyzer.py` — `fingerprint(sql)`: uses `sqlglot` to normalize SQL statements (strips literals, collapses `IN (...)` lists, canonicalizes table aliases to `T0`, `T1`, sorts safe AND-chains).
-- [x] `analyzer.py` — `detect_n_plus_one(queries, threshold)`: groups query logs by fingerprint and flags groups exceeding the execution threshold (default 3).
-- [x] `analyzer.py` — `suggest_fix(fingerprint, relationships)`: generates plain-English Django ORM recommendations (`.select_related()` / `.prefetch_related()`).
-
-### Tests (`tests/core/`)
-- [x] `test_analyzer.py` — unit tests verifying literal stripping, `IN` clause collapsing, alias canonicalization, and threshold detection.
-
-### Infra & Specs (`docs/`, root)
-- [x] Repository layout (`dqs/core/`, `dqs/adapters/django/`, `tests/`)
-- [x] Open-source documentation (`README.md`, `CHANGELOG.md`, `ROADMAP.md`, `LICENSE`, `SECURITY.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`)
-- [x] Packaging spec (`pyproject.toml` — `sqlglot>=26.0.0` core dep, `[django]` optional extra, floors explained above)
-- [x] Docker setup (`Dockerfile`, `docker-compose.yml` with Postgres 16)
-
-**What "done" looks like:** `pytest tests/core/` runs completely green in Docker, proving AST normalization works against raw SQL without needing Django running at all.
+**What "done" looks like:** `pytest tests/core/` runs green in Docker, proving AST normalization works without Django running at all.
 
 ---
 
 ## v0.2.0 — Django Introspector & Isolated Sandbox Execution
 
-> Status: IN PROGRESS 🟡
-
-**In plain words:** Scan the host Django app to discover all active routes, and execute an endpoint request inside a rolling-back database transaction so no mock data or side effects persist. This is the phase that proves DQS can safely touch a real Django project at all.
+> Status: IN PROGRESS 🟡 — retained for the view-discovery and single-request execution path; the *capture mechanism* inside the Runner is being replaced in v0.25, not extended here.
 
 ### Django Adapter (`dqs/adapters/django/`)
-- [x] `apps.py` — registers `dqs.adapters.django` as an installable Django app.
-- [x] `introspector.py` — `DjangoIntrospector.list_all_routes()`: recursively walks `url_patterns`, returns `{path, methods, view_name, view_type, is_drf, executable, has_path_params}` metadata. Excludes DQS's own `/dqs/` routes, enforces `DEBUG=True`, and skips routes where HTTP methods can't be confidently determined rather than guessing.
-- [x] `runner.py` — `DjangoSandboxRunner.execute_isolated()`:
-  - Generates WSGI requests via `RequestFactory`.
-  - Attaches `request.user` directly (bypassing auth middleware entirely).
-  - Captures queries via `CaptureQueriesContext(connection)`.
-  - Wraps execution in `transaction.atomic()`, rolls back via `transaction.savepoint_rollback()`.
-  - Enforces `DEBUG=True` and a strict HTTP-method whitelist before executing.
-  - Catches exceptions raised inside the profiled view so a buggy endpoint reports as an error instead of crashing the sandbox call.
-- [x] `runner.py` — greps view source (`inspect.getsource`) for unhandled side-effects (`requests.post`, `smtplib`, Celery `.delay()`, `group_send()`) and emits warning flags.
-- [ ] **Enriched execution payload** — wrap execution in timing blocks to return a structured result, not just raw queries and status:
-  ```json
-  {
-    "route": "/books/12/",
-    "status_code": 200,
-    "metrics": {
-      "total_time_ms": 14.2,
-      "db_time_ms": 8.7,
-      "total_queries": 12,
-      "unique_fingerprints": 3
-    },
-    "n_plus_one_detected": true,
-    "analysis": [ /* fingerprint groups + suggest_fix() output from dqs/core/analyzer.py */ ]
-  }
-  ```
-  This is what turns the Runner's current raw-queries-and-status-code return value into something an MCP tool call (v0.4.0) can hand back to an agent as a single benchmarkable result — the agent needs `total_queries`/`db_time_ms` as a before/after number to confirm a fix actually worked.
-
-> ⚠️ **Known integration gap, carries into v0.3.0:**
-> `DjangoIntrospector` can discover a route like `/books/<int:pk>/` and flags it via `has_path_params: True`, but nothing yet substitutes a real value in — `DjangoSandboxRunner.execute_isolated()` needs a concrete path (`/books/5/`), not a pattern with an unfilled converter. This is v0.3.0's `converters.py` + Mock Data Generator work. Tracked here so it isn't a surprise once anything downstream tries to actually run a dynamic-URL route end to end.
+- [x] `apps.py` — registers `dqs.adapters.django`, hard `DEBUG=True` guardrail in `ready()`.
+- [x] `introspector.py` — `DjangoIntrospector.list_all_routes()`: recursively walks `url_patterns`, returns route metadata. Excludes `/dqs/` routes, enforces `DEBUG=True`.
+- [x] `introspector.py` — FBV and CBV cases correctly return `executable=False` + `reason_unexecutable` when methods can't be statically resolved, rather than guessing.
+- [ ] **Carryover bug, not yet fixed:** the DRF ViewSet case (Case A) still falls back to `methods or ["GET"]` — the one branch that didn't get the "skip, don't guess" treatment applied to FBV/CBV. Fix to match: if `actions` resolves empty, return `executable=False` with an explicit `reason_unexecutable`.
+- [x] `runner.py` — `DjangoSandboxRunner.execute_isolated()`: builds WSGI requests via `RequestFactory`, wraps execution in `transaction.atomic()` + `transaction.savepoint()`/`savepoint_rollback()` (corrected — savepoints now open inside an active atomic block), enforces `DEBUG=True` and an HTTP-method whitelist, catches exceptions raised inside the profiled view.
+- [x] `runner.py` — `execute_isolated()` now accepts an explicit `user` parameter (defaults to `AnonymousUser`) instead of hardcoding anonymous access — needed for profiling auth-gated endpoints.
+- [~] `runner.py` — query capture currently via `CaptureQueriesContext(connection)`, fingerprinted correctly via `core.analyzer.fingerprint()` (fixed — no longer dedupes on raw SQL text). **This entire capture mechanism is superseded by the interceptor in v0.25** — kept here only as the "walking skeleton" proof that discover → execute → analyze → suggest works end to end for one `Target` kind (views) before generalizing.
+- [~] `runner.py` — `_detect_side_effects()` exists and greps source for risky patterns, but only works reliably for plain functions, not CBVs (it inspects the `as_view()` dispatch wrapper, not the actual `get()`/`post()` handlers). **Superseded by the whole-codebase static AST advisor in v0.25**, which resolves the real view class and isn't scoped only to URL-reachable code in the first place.
 
 ### Demo Project (`demo_project/`)
-- [ ] `demo_project/` settings, URLs, and DB configuration pointing to Postgres 16.
-- [ ] `sample_app/models.py` — test models (`Author`, `Book`, `Publisher`) with FK relationships.
-- [ ] `sample_app/views.py` — intentionally flawed endpoints (triggering N+1 queries) for integration testing.
+- [ ] `demo_project/` settings, URLs, Postgres 16 config.
+- [ ] `sample_app/models.py` — `Author`, `Book`, `Publisher` with FK relationships.
+- [ ] `sample_app/views.py` — intentionally flawed endpoints for integration testing.
 
-**What "done" looks like:** run a request through `DjangoSandboxRunner`, get back the full enriched payload (queries, timing, fingerprints, suggestions), and confirm via direct database query that 0 rows were modified or created.
+**What "done" looks like:** run a request through `DjangoSandboxRunner`, get back queries + timing + fingerprints + suggestions, confirm via direct DB query that 0 rows were modified or created.
 
 ---
 
-## v0.3.0 — Dynamic Path Converter Engine & Mock Data Generator
+## v0.25.0 — Query Interceptor, `Target` Abstraction & Static AST Advisor *(new phase)*
 
 > Status: PLANNED 🔲
 
-**In plain words:** Teach DQS to handle real-world routes that aren't bare paths, and to invent realistic-but-safe test data so those routes have something valid to run against. This is the phase where DQS goes from "works on toy endpoints" to "works on the messy routes a real Django app actually has."
+**In plain words:** This is the phase that answers "how do we catch N+1s and risky code in a notification service, a signal receiver, or anything else with no URL, without building a separate discovery system for every kind of trigger?" Two mechanisms, both framework-agnostic in intent:
+
+1. **Intercept at the DB-driver boundary**, not at the request boundary — every query issued by *any* code path passes through one hook, and the Python call stack at that moment tells you exactly which function issued it.
+2. **Scan the whole codebase statically**, not just URL-reachable code — catches risky patterns and schema-level issues in code that never executes during a profiling run at all.
+
+### Core (`dqs/core/`)
+- [ ] `targets.py` — new `Target` dataclass: `id`, `kind` (`"view" | "signal" | "task" | "consumer" | "static_only"`), `triggerable: bool`, `trigger_spec: dict | None`, `static_findings: list`. This becomes the one shape both the human-facing UX and the MCP layer operate on, regardless of what kind of code is behind it. Adapters populate it; `core/` never needs to know Django-specific detail about *how* a view differs from a signal.
+- [ ] `static_advisor.py` — whole-project AST scanner (framework-agnostic, no execution, no DB connection required):
+  - ORM-call-inside-loop detection (`.objects.get()`/`related.all()` inside a `for`/comprehension without a preceding `select_related`/`prefetch_related` on the parent queryset) — catches N+1 shape in code with zero discoverable entry point.
+  - Schema-level checks: cross-reference `Meta.indexes` / `db_index` against actual `.filter()`/`.exclude()`/`.order_by()` call sites to flag missing indexes on hot columns.
+  - PK strategy advice: flag auto-increment integer PKs on models that look write-heavy/distributed-friendly, suggest UUIDv7 with rationale (sortable, index-friendly, unlike UUIDv4).
+  - Blocking-call detection: resolves actual imports (not string-grep) to catch `import requests as r; r.post(...)` style indirection; classifies whether the call site is inside a view (flag as blocking-in-request-cycle) vs. inside a Celery task (fine, already offloaded).
+  - Output: populates `static_findings` on any `Target`, including ones with `triggerable=False`.
 
 ### Django Adapter (`dqs/adapters/django/`)
-- [ ] `converters.py` — parses `pattern.pattern.converters` to detect `int`, `str`, `slug`, and `uuid` path converters on a given route (`IntConverter`, `UUIDConverter`, `SlugConverter`/`StringConverter`). Build this first — it's self-contained, testable without any mock data existing yet, and both `mock_generator.py` and the path substitution helper below depend on knowing the converter type before they can do anything.
-- [ ] `converters.py` — **Model resolution**, two-step: (1) for class-based/DRF views, inspect `view_class.queryset.model` or `view_class.model` directly; (2) for FBVs or views without an explicit model attribute, fall back to matching route tokens against `django.apps.apps.get_models()` (e.g. `/books/` → `Book`). **This fallback is a heuristic and will guess wrong sometimes** — consistent with the "skip rather than guess" principle already used in the Introspector, if resolution is ambiguous or fails, this must surface a clear error asking for an explicit override rather than silently generating mock data for the wrong model.
-- [ ] `mock_generator.py` — `ModelBakeryGenerator.generate()`: wraps `baker.make(Model, _quantity=N)`.
-- [ ] `mock_generator.py` — Validation Recovery Flow: catch `ValidationError`/`IntegrityError`, accept one valid sample entry from the user, reuse that exact value across all N rows rather than guessing at the validator's pattern.
-- [ ] `mock_generator.py` — Uniqueness Guard: detect `unique=True` on a failing field and fall back to generating exactly 1 row, with an explanatory note rather than a silent failure.
-- [ ] `mock_generator.py` — In-Memory Sample Cache: keyed by `model_name.field_name`, so an accepted sample isn't re-prompted for on every subsequent run in the same dev server session.
-- [ ] **Path substitution helper** — resolves the v0.2.0 gap: given a route flagged `has_path_params: True`, pull a real primary key (or other resolved value) from a freshly-generated mock row of the matching model, and substitute it into the route before it's passed to `execute_isolated()`. If a custom/unrecognized converter is involved, allow an explicit override (`path_params={"pk": 42}`) instead of guessing.
+- [ ] `query_interceptor.py` — wraps `connection.execute_wrapper()`. Captures `(sql, duration, origin_file, origin_function, origin_line)` per query by walking `inspect.stack()` at capture time and finding the first frame outside `django.db.*`. This is the mechanism that lets DQS attribute an N+1 to a specific line of application code, regardless of whether that code was reached via a URL, a signal, or a direct function call.
+- [ ] `runner.py` — refactor `execute_isolated()` to use `query_interceptor` instead of `CaptureQueriesContext`; add a new general-purpose `profile_callable(fn, *args, **kwargs)` that opens the interceptor + savepoint, calls *any* Python callable, and returns captured queries with origin data. `execute_isolated()` becomes one caller of `profile_callable()` (supplying "build a request, call the view" as the callable) rather than a separate code path.
+- [ ] Signal-receiver discovery — walk `Signal.receivers` (e.g. `post_save`, `pre_delete`) to populate `Target(kind="signal", triggerable=True, trigger_spec={...})`, where `trigger_spec` describes how to synthesize a triggering model event (e.g. create a throwaway instance inside the same rolled-back transaction).
+- [ ] Celery task discovery — walk `celery.app.tasks` registry to populate `Target(kind="task", ...)`; triggering calls the task function directly in-process (not via the broker) so it runs inside the same interceptor + rollback.
+- [ ] WebSocket/Channels consumer discovery — populate as `Target(kind="consumer", triggerable=False)` for now; static findings still apply even though no execution path exists yet (execution remains v2.0+ scope, see Later Releases).
 
-**What "done" looks like:** ask the generator for 50 `Book` instances, handle any validation errors via the sample-entry flow, confirm 50 rows exist mid-run and `savepoint_rollback()` removes all of them afterward. Additionally: successfully profile a route like `/books/<int:pk>/` end to end, using a PK pulled from a generated row rather than a manually supplied one.
+**What "done" looks like:** run the interceptor across a scripted flow that touches a view *and* a signal-triggered notification service with no URL; get back correctly attributed N+1 fingerprints for both, plus static findings (e.g. a missing index, a blocking `requests.post` call inside a view) for code that never executed at all during the run.
+
+---
+
+## v0.3.0 — Dynamic Path Converter Engine, Mock Data Generator & Request-Body Inference
+
+> Status: PLANNED 🔲 — core scope unchanged from prior draft; one addition below.
+
+### Django Adapter (`dqs/adapters/django/`)
+- [ ] `converters.py` — parses `pattern.pattern.converters` to detect `int`, `str`, `slug`, `uuid` path converters.
+- [ ] `converters.py` — model resolution: explicit `view_class.queryset.model`/`view_class.model` first, FBV token-matching fallback against `get_models()` second. Ambiguous resolution surfaces an explicit-override error rather than guessing (consistent with the "skip rather than guess" rule already applied elsewhere).
+- [ ] `mock_generator.py` — `ModelBakeryGenerator.generate()`, Validation Recovery Flow, Uniqueness Guard, In-Memory Sample Cache — all as previously scoped.
+- [ ] **Path substitution helper** — pulls a real PK from a generated mock row and substitutes it into a `has_path_params: True` route before it hits the Runner.
+- [ ] *(New)* **Request-body inference** — for POST/PUT/PATCH targets, read the view's `serializer_class` (DRF) or `form_class` (plain Django) to determine expected field names/types — the same principle `drf-spectacular` uses to generate example payloads from a serializer, applied here to auto-populate `data=` for `execute_isolated()`/`profile_callable()` instead of requiring the caller to hand-type a JSON body. Feeds directly into `mock_generator.py` for realistic field values. This is what makes the "Postman-like" single-target testing experience (below) actually usable without manual payload construction.
+
+**What "done" looks like:** generate 50 `Book` instances, handle validation errors via the sample-entry flow, confirm rollback removes them. Additionally: profile `/books/<int:pk>/` end to end using a generated PK, and profile a POST endpoint end to end using an auto-inferred request body, both without manual input.
+
+---
+
+## v0.35.0 — Single-Target Testing UX ("Postman-like" experience) *(new, small phase)*
+
+> Status: PLANNED 🔲
+
+**In plain words:** Let a human — or an agent — pick exactly one `Target` (a view, later a signal or task) from the full discovered list and run just that one, instead of re-scanning everything. This is a thin layer over v0.2/v0.25/v0.3 work, not new discovery or execution logic.
+
+- [ ] CLI/browser selector over `list_all_routes()` / the broader `Target` list once v0.25 lands — pick one, run it, see the enriched result (queries, timing, fingerprints, fix suggestion, static findings).
+- [ ] This UX and the MCP tools in v0.4.0 call the *same* underlying functions — no duplicated logic between "human clicks a button" and "agent calls a tool."
+
+**What "done" looks like:** a developer opens the target list, selects one view, runs it, and sees the same structured result an MCP tool call would return.
 
 ---
 
 ## v0.4.0 — Model Context Protocol (MCP) Server & Agentic Loop
 
-> Status: PLANNED 🔲
-
-**In plain words:** This is the phase that delivers on the actual point of the project — turning everything built in v0.1–v0.3 into something an AI coding agent can call directly, act on, and re-verify, without a human relaying information back and forth by hand.
+> Status: PLANNED 🔲 — now explicitly built on the `Target` abstraction from v0.25, not directly on `RouteMetadata`.
 
 ### MCP Layer (`dqs/mcp/`)
-- [ ] `server.py` — native MCP server implementation using the standard `mcp` SDK (stdio and/or SSE transport).
-- [ ] **MCP Tools:**
-  - `list_django_routes()` — returns the same structured metadata `DjangoIntrospector.list_all_routes()` produces, exposed as an agent-callable tool.
-  - `profile_endpoint(route, method, path_params=None)` — runs the Sandbox Runner (using the v0.3.0 path-substitution logic when `path_params` isn't supplied) and returns the enriched payload from v0.2.0's execution work: timing, query count, AST fingerprints, fix suggestions.
-  - `seed_mock_data(model_name, quantity)` — exposes the Mock Data Generator directly, so an agent can prepare sandbox state ahead of a profiling call rather than relying on `profile_endpoint` to do it implicitly every time.
-- [ ] **MCP Resources & Prompts** — expose a standard context prompt (e.g. `fix_n_plus_one`) so an agent has explicit guidance on how to interpret a DQS fingerprint result and what a correct rewrite looks like, rather than inferring it from the raw JSON alone.
+- [ ] `server.py` — native MCP server (`mcp` SDK, stdio and/or SSE transport).
+- [ ] **MCP Tools**, all thin wrappers over the `Target` API (no per-kind special-casing at the MCP layer itself):
+  - `list_targets(kind=None)` — returns all discovered targets (views today; signals/tasks once v0.25's discovery lands), optionally filtered by kind.
+  - `get_static_findings(target_id)` — always available, even for `triggerable=False` targets (e.g. the notification service, WebSocket consumers) — this is what lets an agent get *something* actionable on code DQS can't yet execute.
+  - `profile_target(target_id, **trigger_args)` — runs `profile_callable()` under the hood; only meaningful when `triggerable=True`.
+  - `seed_mock_data(model_name, quantity)` — exposes the Mock Data Generator directly.
+- [ ] **MCP Resources & Prompts** — a standard context prompt (e.g. `fix_n_plus_one`) so an agent has explicit guidance on interpreting a fingerprint result and what a correct rewrite looks like.
 
-**What "done" looks like:** an AI IDE agent (Claude, Cursor, etc.) connects to the DQS MCP server, calls `list_django_routes`, picks one, calls `profile_endpoint`, receives a fingerprinted N+1 result with a fix suggestion, rewrites the view itself, calls `profile_endpoint` again on the same route, and confirms the query count actually dropped (e.g. 50 → 2) — all without a human doing anything except approving the agent's changes.
+**What "done" looks like:** an AI agent connects, calls `list_targets`, calls `profile_target` on one, gets a fingerprinted N+1 with a fix suggestion *and* any static findings for related non-executable code (e.g. "this view's save also triggers a signal-based notification service with a blocking `smtplib` call — consider offloading it"), rewrites the view, re-profiles, confirms the query count dropped — without a human relaying anything by hand.
 
 ---
 
 ## v1.0.0 — Terminal CLI Linter & Interactive Dashboard (optional)
 
-> Status: FUTURE 🔮
+> Status: FUTURE 🔮 — unchanged in substance; static AST advisor (v0.25) makes `dqs check` meaningfully stronger since it can now fail a CI build on static findings alone, without needing a live DB or a running server.
 
-**In plain words:** Convenience layers for people who want to use DQS without an AI agent in the loop — a CLI for scripted/CI use, and a browser dashboard for anyone who'd rather click around visually. Neither is required for the core agentic loop to work; both are built on top of the same v0.1–v0.4 engine, not a replacement for it.
-
-- [ ] `dqs/cli.py` — a `dqs scan` / `dqs check --max-queries-per-route=N` terminal command for local developer checks and CI/CD quality gates (e.g. fail a build if a new endpoint introduces an N+1).
-
-  > 🤔 **Open sequencing question:** this is currently placed after the MCP server (v0.4.0), purely because it's a "convenience layer built on the core engine." But the CI/CD gate doesn't actually depend on the MCP layer at all — it only needs v0.1–v0.3. It's also one of the strongest differentiators for the large majority of Django developers who aren't using an AI agent day-to-day. Worth a deliberate decision on whether `dqs check` should be pulled forward and shipped in parallel with v0.4.0 rather than strictly after it, rather than leaving it here by default.
-- [ ] `dqs/dashboard/` — an optional local server-rendered UI (endpoint list, run button, N+1 alerts, fingerprint inspection drawer) for developers who prefer a visual dashboard over AI chat integration. This was originally scoped as the core v0.4.0 deliverable in an earlier draft of this roadmap — it's still planned, just intentionally after the MCP/agentic loop rather than before it, since that loop is the actual differentiator.
+- [ ] `dqs/cli.py` — `dqs scan` / `dqs check --max-queries-per-route=N`, now also able to gate on static findings (missing indexes, blocking calls) independent of dynamic profiling.
+  > Open sequencing question retained from prior draft: whether to pull this forward in parallel with v0.4.0 rather than strictly after it. The static-only mode (v0.25) makes the case for pulling it forward stronger, since `dqs check --static-only` needs none of v0.2–v0.4's execution machinery.
+- [ ] `dqs/dashboard/` — optional local UI (target list, run button, N+1 alerts, static findings panel, fingerprint inspection drawer).
 
 ---
 
@@ -168,7 +170,7 @@
 > Status: FUTURE 🔮
 
 - **FastAPI / SQLAlchemy Adapter** — second concrete framework adapter.
-- **Abstract Base Classes (`BaseIntrospector`, `BaseRunner`)** — formalize adapter contracts once adapter #2 actually exists to generalize from; deliberately not written speculatively against a single implementation.
-- **Polyfactory swap-in** — multi-ORM mock data generator, replacing `model_bakery` once a second ORM adapter needs it.
-- **OpenAPI integration** — route discovery via `drf-spectacular` schema parsing, as an alternative/supplement to `DjangoIntrospector`'s own URL-tree walk.
-- **WebSocket / Channels execution support** — `DjangoIntrospector` can already discover Channels consumer routes (`include_websockets=True`), flagged `executable: False` and hidden by default, since no Sandbox Runner execution path exists for them yet. A fundamentally different execution mechanism than `RequestFactory` is needed here — genuinely v2 scope, not a v1 gap.
+- **Abstract Base Classes (`BaseIntrospector`, `BaseRunner`, `BaseInterceptor`)** — formalize adapter contracts once adapter #2 actually exists to generalize from.
+- **Polyfactory swap-in** — multi-ORM mock data generator.
+- **OpenAPI integration** — route discovery via `drf-spectacular` schema parsing as a supplement to `DjangoIntrospector`'s own tree walk (note: v0.3.0 already borrows the *serializer-introspection* idea from Spectacular for request-body inference — this later item is specifically about using Spectacular's schema as an alternate discovery source, a narrower and separate thing).
+- **WebSocket / Channels execution support** — discovery exists as of v0.25 (`Target(kind="consumer", triggerable=False)`), but no execution path. A fundamentally different trigger mechanism than `RequestFactory`/direct-call is needed — genuinely v2 scope.

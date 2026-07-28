@@ -1,106 +1,125 @@
-# dqs/adapters/django/runner.py
-import time
-import inspect
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+import traceback
+from typing import Any, Dict, List, Optional, Tuple
+from django.apps import apps
 from django.conf import settings
-from django.core.exceptions import ImproperlyConfigured
-from django.db import connection, transaction
-from django.test import RequestFactory
-from django.test.utils import CaptureQueriesContext
+from django.contrib.auth.models import AnonymousUser
+from django.core.exceptions import ImproperlyConfigured, Resolver404
+from django.db import transaction
+from django.urls import resolve, reverse
+from model_bakery import baker
+from rest_framework.response import Response
+from rest_framework.test import APIRequestFactory
+from dqs.core.profiler import SQLProfiler
+from dqs.core.analyzer import SQLAnalyzer
 
-@dataclass
-class ExecutionResult:
-    route: str
-    status_code: int
-    metrics: Dict[str, Any] = field(default_factory=dict)
-    queries: List[Dict[str, Any]] = field(default_factory=list)
-    error: Optional[str] = None
-    side_effect_warnings: List[str] = field(default_factory=list)
-
-
-class DjangoSandboxRunner:
+class SandboxRunner:
+    """
+    Robust execution sandbox for DQS. 
+    Guarantees database isolation via savepoints, captures real primary keys from 
+    seeded mock data, and profiles execution using SQLProfiler and SQLAnalyzer.
+    """
     def __init__(self):
-        # Security Guardrail: Refuse to execute if DEBUG is disabled
         if not getattr(settings, "DEBUG", False):
-            raise ImproperlyConfigured("DjangoSandboxRunner requires DEBUG=True for safety.")
-        self.factory = RequestFactory()
+            raise ImproperlyConfigured("DQS SandboxRunner can only run when DEBUG=True.")
+        self.factory = APIRequestFactory()
 
-    def execute_isolated(self, path: str, method: str = "GET", data: Optional[dict] = None) -> ExecutionResult:
-        """
-        Executes a route inside an atomic database transaction savepoint that is 
-        instantly rolled back. Captures all SQL queries, execution time, and status codes.
-        """
-        method = method.upper()
-        if method not in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
-            return ExecutionResult(route=path, status_code=400, error=f"Invalid HTTP method: {method}")
-
-        # Step 1: Resolve the view handler from the URL resolver
-        from django.urls import resolve
-        try:
-            resolved_match = resolve(path)
-        except Exception as e:
-            return ExecutionResult(route=path, status_code=404, error=f"Route resolution failed: {str(e)}")
-
-        # Step 2: Build the WSGI request object
-        request_func = getattr(self.factory, method.lower(), None)
-        if not request_func:
-            return ExecutionResult(route=path, status_code=405, error=f"Unsupported method request generator: {method}")
-
-        request = request_func(path, data or {})
+    def run_profile(
+        self,
+        url_name: str,
+        method: str = "GET",
+        path_params: Optional[Dict[str, Any]] = None,
+        query_params: Optional[Dict[str, Any]] = None,
+        payload: Optional[Dict[str, Any]] = None,
+        seed_count: int = 0,
+        target_model: Optional[str] = None,
+        user: Optional[Any] = None,
+    ) -> Dict[str, Any]:
         
-        # Security: Bypass authentication middleware constraints for sandbox testing
-        from django.contrib.auth.models import AnonymousUser
-        request.user = AnonymousUser()
+        path_params = path_params or {}
+        query_params = query_params or {}
+        http_method = method.lower()
 
-        # Step 3: Run inside an isolated rolling-back database transaction
-        queries_captured = []
-        status_code = 500
-        start_time = time.perf_counter()
-        db_start_time = 0.0
-        db_duration = 0.0
+        # 1. Open isolated transaction savepoint
+        with transaction.atomic():
+            sid = transaction.savepoint()
+            seeded_records_info = []
+            try:
+                # 2. Seed mock records and capture their real primary keys
+                if seed_count > 0 and target_model:
+                    model_class = apps.get_model(target_model)
+                    created_instances = baker.make(model_class, _quantity=seed_count)
+                    if not isinstance(created_instances, list):
+                        created_instances = [created_instances]
+                    
+                    seeded_records_info = [
+                        {"pk": obj.pk, "__str__": str(obj)} for obj in created_instances
+                    ]
 
-        sid = transaction.savepoint()
-        try:
-            with CaptureQueriesContext(connection) as cqc:
-                db_start = time.perf_counter()
-                
-                # Execute the view callback directly
-                response = resolved_match.func(request, *resolved_match.args, **resolved_match.kwargs)
-                
-                db_duration = (time.perf_counter() - db_start) * 1000.0
-                queries_captured = cqc.captured_queries
-                status_code = getattr(response, "status_code", 200)
+                # 3. Resolve execution path natively via Django reverse()
+                try:
+                    formatted_path = reverse(url_name, kwargs=path_params)
+                except Exception as rev_err:
+                    return {
+                        "status_code": 400,
+                        "error": f"URL Reversal Failed: {str(rev_err)}",
+                        "queries": [],
+                        "total_queries": 0,
+                        "n_plus_one_detected": False,
+                    }
 
-        except Exception as e:
-            status_code = 500
-            return ExecutionResult(
-                route=path,
-                status_code=status_code,
-                error=f"Exception raised inside view execution: {str(e)}"
-            )
-        finally:
-            # Absolute Guarantee: Roll back all database modifications immediately
-            transaction.savepoint_rollback(sid)
+                # 4. Construct DRF Request with user context
+                request_func = getattr(self.factory, http_method)
+                if http_method == "get":
+                    request = request_func(formatted_path, data=query_params)
+                else:
+                    request = request_func(formatted_path, data=payload or {}, format="json")
 
-        total_duration = (time.perf_counter() - start_time) * 1000.0
+                request.user = user or AnonymousUser()
 
-        # Step 4: Format the enriched execution metrics payload required by v0.4.0 (MCP Agent)
-        metrics = {
-            "total_time_ms": round(total_duration, 2),
-            "db_time_ms": round(db_duration, 2),
-            "total_queries": len(queries_captured),
-            "unique_fingerprints": len(set(q["sql"] for q in queries_captured)),
-        }
+                # 5. Resolve view & handle routing errors gracefully
+                try:
+                    resolved = resolve(formatted_path)
+                except Resolver404:
+                    return {
+                        "status_code": 404,
+                        "error": f"Resolved path '{formatted_path}' returned Resolver404.",
+                        "queries": [],
+                        "total_queries": 0,
+                        "n_plus_one_detected": False,
+                    }
 
-        formatted_queries = [
-            {"sql": q["sql"], "time_ms": float(q["time"])} 
-            for q in queries_captured
-        ]
+                view_func = resolved.func
+                request.resolver_match = resolved
 
-        return ExecutionResult(
-            route=path,
-            status_code=status_code,
-            metrics=metrics,
-            queries=formatted_queries,
-        )
+                # 6. Execute, profile SQL queries, and capture responses safely
+                with SQLProfiler() as profiler:
+                    try:
+                        response = view_func(request, *resolved.args, **resolved.kwargs)
+                        if isinstance(response, Response) and hasattr(response, "render"):
+                            response.render()
+                    except Exception as view_err:
+                        return {
+                            "status_code": 500,
+                            "error": str(view_err),
+                            "traceback": traceback.format_exc(),
+                            "queries": profiler.captured_queries,
+                            "total_queries": len(profiler.captured_queries),
+                            "n_plus_one_detected": False,
+                        }
+
+                # 7. Analyze queries using SQLAnalyzer (N+1 detection & fingerprints)
+                analysis_results = SQLAnalyzer.analyze(profiler.captured_queries)
+
+                return {
+                    "status_code": getattr(response, "status_code", 200),
+                    "response_content": getattr(response, "data", getattr(response, "content", None)),
+                    "seeded_records": seeded_records_info,
+                    "queries": profiler.captured_queries,
+                    "total_queries": len(profiler.captured_queries),
+                    "n_plus_one_detected": analysis_results.get("has_n_plus_one", False),
+                    "optimization_suggestions": analysis_results.get("suggestions", []),
+                }
+
+            finally:
+                # 8. Absolute rollback guarantee: database remains completely pristine
+                transaction.savepoint_rollback(sid)
