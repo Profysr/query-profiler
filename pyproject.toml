@@ -53,7 +53,7 @@ include = ["dqs*"]
 
 # Automatically configures pytest to use the demo project settings
 [tool.pytest.ini_options]
-django_settings_module = "config.settings"
+DJANGO_SETTINGS_MODULE = "config.settings"
 pythonpath = [".", "demos/drf"]
 testpaths = ["tests"]
 

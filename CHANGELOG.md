@@ -59,3 +59,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added relational test models (`Author`, `Book`, `Publisher`).
   - Added intentionally flawed N+1 endpoints (`NPlusOneBookListView`) for profiling validation.
 - **Adapter Test Suite (`tests/adapters/django/`)**: Added unit and integration tests covering route discovery, sandbox isolation, query capture, and transaction rollback.
+
+## [0.2.0] - 2026-06-29
+
+### Fixed
+- **DRF Runner Logic Syntax**: Corrected invalid boolean syntax (`&&` to `and`) in `dqs/adapters/drf/runner.py` when evaluating HTTP `Response` objects during execution profiling.
+- **Pytest Configuration Case Sensitivity**: Fixed `pytest-django` initialization by declaring `DJANGO_SETTINGS_MODULE` in uppercase within `pyproject.toml`.
+- **Editable Install Context in Docker**: Update the folder architecture to support demos for other orms and Move the docker file into demos/drf folder.

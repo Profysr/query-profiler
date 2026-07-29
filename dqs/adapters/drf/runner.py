@@ -79,7 +79,6 @@ from django.test.utils import CaptureQueriesContext
 from model_bakery import baker
 from rest_framework.response import Response
 from rest_framework.test import APIRequestFactory
-
 from dqs.core.analyzer import fingerprint, detect_n_plus_one, suggest_fix
 
 
@@ -187,7 +186,7 @@ class DjangoSandboxRunner:
                         response = resolved_match.func(request, *resolved_match.args, **resolved_match.kwargs)
                         
                         # Render DRF responses if they are lazy-evaluated
-                        if isinstance(response, Response) && hasattr(response, "render"):
+                        if isinstance(response, Response) and hasattr(response, "render"):
                             response.render()
                             
                         db_duration = (time.perf_counter() - db_start) * 1000.0
