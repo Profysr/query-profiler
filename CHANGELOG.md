@@ -60,9 +60,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added intentionally flawed N+1 endpoints (`NPlusOneBookListView`) for profiling validation.
 - **Adapter Test Suite (`tests/adapters/django/`)**: Added unit and integration tests covering route discovery, sandbox isolation, query capture, and transaction rollback.
 
-## [0.2.0] - 2026-06-29
+## [0.2.1] - 2026-06-29
 
 ### Fixed
+
+- **DRF ViewSet action resolution (`introspector.py`)**: The ViewSet branch of `_analyze_view()` no longer silently falls back to `methods or ["GET"]` when the `actions` mapping can't be resolved. It now returns `executable=False` with an explicit `reason_unexecutable`, matching the "skip rather than guess" behavior already applied to FBV/CBV routes. Eliminates a class of false-positive "executable" routes that would have failed silently at profile time.
 - **DRF Runner Logic Syntax**: Corrected invalid boolean syntax (`&&` to `and`) in `dqs/adapters/drf/runner.py` when evaluating HTTP `Response` objects during execution profiling.
 - **Pytest Configuration Case Sensitivity**: Fixed `pytest-django` initialization by declaring `DJANGO_SETTINGS_MODULE` in uppercase within `pyproject.toml`.
+
+### Added
+
+- **Safety guard test coverage**: Added `test_pipeline.py`, covering:
+  - `DjangoIntrospector` and `DjangoSandboxRunner` both raise `ImproperlyConfigured` when `DEBUG=False`.
+  - `DjangoIntrospector.list_all_routes()` returns well-formed `RouteMetadata` objects across all discovered routes.
+  - `DjangoSandboxRunner.execute_isolated()` returns a `400` with a clear error message for unsupported HTTP methods.
+  - `_detect_side_effects()` correctly flags risky imports (e.g. `smtplib`) in plain view functions.
+  - `_extract_source_location()` correctly walks the call stack to attribute a query to user code, bypassing framework-internal frames.
+  - SQL fingerprinting and `detect_n_plus_one()` — literal normalization, `AND` clause ordering, and threshold-based flagging — re-verified against the updated introspector/runner.
 - **Editable Install Context in Docker**: Update the folder architecture to support demos for other orms and Move the docker file into demos/drf folder.
+
+### Known Limitations (carried forward, not regressions)
+
+- `_detect_side_effects()` still inspects `as_view()`'s dispatch wrapper for class-based views rather than the actual `get()`/`post()` handlers, so side-effect detection on CBVs remains unreliable. Slated to be superseded by the whole-codebase static AST advisor in v0.25.0, not patched here.
+- Query capture remains `CaptureQueriesContext`-based; the DB-driver-boundary interceptor lands in v0.25.0.
