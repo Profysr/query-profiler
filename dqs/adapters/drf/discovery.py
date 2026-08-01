@@ -3,9 +3,10 @@ import logging
 from typing import Any, Dict, List, Optional
 from django.db.models.signals import post_save, pre_save, post_delete, pre_delete
 from dqs.core.targets import Target
-from dqs.core.static_advisor import StaticASTAdvisor
 from django.apps import apps
 import weakref
+from dqs.adapters.drf.schema_advisor import check_missing_indexes, check_pk_strategy
+from dqs.core.static_advisor import StaticASTAdvisor
 
 logger = logging.getLogger("dqs")
 
@@ -31,7 +32,38 @@ class DjangoTargetDiscovery:
         targets: List[Target] = []
 
         # 1. Map Introspected URL Routes into Targets
+        # for route in self.introspector_routes:
+        #     targets.append(Target(
+        #         id=f"view:{route.path}",
+        #         kind="view",
+        #         triggerable=route.executable,
+        #         trigger_spec={
+        #             "path": route.path,
+        #             "methods": route.methods,
+        #             "path_params": [p.__dict__ for p in route.path_params],
+        #             "target_model": route.target_model,
+        #         },
+        #         static_findings=[],
+        #     ))
+
         for route in self.introspector_routes:
+            static_findings = []
+            static_findings.extend(check_pk_strategy(route.target_model))
+
+            # Best-effort: try to statically analyze the view's own source for queried field names, to feed the missing-index check. Not always resolvable (e.g. ViewSets with dynamically dispatched methods), so failures here are silently skipped rather than raised.
+            queried_fields = []
+            view_callable = getattr(route, "view_callable", None)  # only if introspector exposes it
+            if view_callable is not None:
+                try:
+                    import inspect
+                    source = inspect.getsource(view_callable)
+                    advisor = StaticASTAdvisor(source)
+                    advisor.run()
+                    queried_fields = advisor.queried_fields
+                except (TypeError, OSError, Exception):
+                    pass
+            static_findings.extend(check_missing_indexes(route.target_model, queried_fields))
+
             targets.append(Target(
                 id=f"view:{route.path}",
                 kind="view",
@@ -42,7 +74,7 @@ class DjangoTargetDiscovery:
                     "path_params": [p.__dict__ for p in route.path_params],
                     "target_model": route.target_model,
                 },
-                static_findings=[],
+                static_findings=static_findings,
             ))
 
         # 2. Discover Django Model Signals
@@ -111,6 +143,54 @@ class DjangoTargetDiscovery:
                 ))
         except (ImportError, Exception):
             pass
+        # 4. Discover Channels WebSocket consumers (discovery only, not executable yet)
+        targets.extend(self._discover_consumers())
+        
+        return targets
+
+    def _discover_consumers(self) -> List[Target]:
+        """
+        Discovers Channels WebSocket consumers via the project's ASGI routing
+        (settings.ASGI_APPLICATION -> ProtocolTypeRouter -> websocket URLRouter).
+        Per roadmap: discovery only for now — triggerable=False. A fundamentally
+        different trigger mechanism than RequestFactory/direct-call is needed for
+        actual execution, which is explicitly v2.0+ scope.
+        """
+        targets: List[Target] = []
+        try:
+            import importlib
+            from django.conf import settings
+
+            asgi_path = getattr(settings, "ASGI_APPLICATION", None)
+            if not asgi_path:
+                return targets
+
+            module_path, app_attr = asgi_path.rsplit(".", 1)
+            asgi_module = importlib.import_module(module_path)
+            asgi_app = getattr(asgi_module, app_attr, None)
+
+            websocket_router = getattr(asgi_app, "application_mapping", {}).get("websocket")
+            routes = getattr(websocket_router, "routes", [])
+
+            for route in routes:
+                callback = getattr(route, "callback", None)
+                consumer_class = getattr(callback, "consumer_class", None) or callback
+                if consumer_class is None:
+                    continue
+
+                name = getattr(consumer_class, "__name__", "UnknownConsumer")
+                targets.append(Target(
+                    id=f"consumer:{name}",
+                    kind="consumer",
+                    triggerable=False,
+                    trigger_spec={
+                        "consumer": name,
+                        "path": str(getattr(route, "pattern", "")),
+                    },
+                    static_findings=self._analyze_callable_statically(consumer_class),
+                ))
+        except Exception as e:
+            logger.debug(f"Could not discover Channels consumers: {e}")
 
         return targets
 
