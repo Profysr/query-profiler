@@ -27,6 +27,7 @@ class StaticASTAdvisor(ast.NodeVisitor):
         self.filename = filename
         self.findings: List[Dict[str, Any]] = []
         self._loop_depth = 0
+        self.import_map: Dict[str, str] = {}
 
     def run(self) -> List[Dict[str, Any]]:
         try:
@@ -39,6 +40,21 @@ class StaticASTAdvisor(ast.NodeVisitor):
                 "line": 0,
             })
         return self.findings
+
+    def visit_Import(self, node: ast.Import) -> None:
+        """Tracks `import X` / `import X as Y` so later calls can be resolved back to X."""
+        for alias in node.names:
+            local_name = alias.asname or alias.name.split(".")[0]
+            self.import_map[local_name] = alias.name
+        self.generic_visit(node)
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        """Tracks `from X import Y` / `from X import Y as Z` so `Y(...)` resolves to `X.Y`."""
+        module = node.module or ""
+        for alias in node.names:
+            local_name = alias.asname or alias.name
+            self.import_map[local_name] = f"{module}.{alias.name}" if module else alias.name
+        self.generic_visit(node)
 
     def visit_For(self, node: ast.For) -> None:
         self._loop_depth += 1
@@ -93,12 +109,13 @@ class StaticASTAdvisor(ast.NodeVisitor):
         return any(call_repr.startswith(prefix) for prefix in BLOCKING_CALL_PREFIXES)
 
     def _get_call_name(self, node: ast.Call) -> str:
-        """Extracts full method dot-notation string from AST Call node."""
+        """Extracts full method dot-notation string from AST Call node, resolving import aliases."""
         if isinstance(node.func, ast.Attribute):
             value = self._unparse_node(node.func.value)
-            return f"{value}.{node.func.attr}"
+            resolved_value = self._resolve_alias(value)
+            return f"{resolved_value}.{node.func.attr}"
         elif isinstance(node.func, ast.Name):
-            return node.func.id
+            return self._resolve_alias(node.func.id)
         return ""
 
     def _unparse_node(self, node: ast.AST) -> str:
@@ -110,3 +127,15 @@ class StaticASTAdvisor(ast.NodeVisitor):
         elif isinstance(node, ast.Attribute):
             return f"{self._unparse_node(node.value)}.{node.attr}"
         return ""
+
+    """
+    ast.NodeVisitor visits nodes in the order they appear, so import_map is being built as it goes. If an import statement appears after the call that uses it in source order (extremely unusual but technically legal at module scope with conditional imports, or if someone analyzes a code fragment out of context), the call would be checked before the alias is known. For typical top-of-file imports this is a non-issue — just don't be surprised if a deliberately adversarial test case exposes it later.
+    """
+    def _resolve_alias(self, name: str) -> str:
+        """Resolves a local name/alias back to its real fully-qualified import path, if known."""
+        base = name.split(".")[0]
+        if base in self.import_map:
+            resolved_base = self.import_map[base]
+            remainder = name[len(base):]  # preserves any trailing ".suffix" already present
+            return f"{resolved_base}{remainder}"
+        return name
