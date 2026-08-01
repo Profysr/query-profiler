@@ -106,18 +106,35 @@ class DjangoSandboxRunner:
             raise ImproperlyConfigured("DjangoSandboxRunner requires DEBUG=True for safety.")
         self.factory = APIRequestFactory()
 
-    def profile_callable(self, func: Callable, *args, **kwargs) -> Tuple[Any, List[Dict[str, Any]], float]:
+    def profile_callable(
+        self,
+        func: Callable,
+        *args,
+        setup: Optional[Callable[[], Any]] = None,
+        **kwargs,
+    ) -> Tuple[Any, List[Dict[str, Any]], float, Any]:
         """
         Executes any generic Python callable inside an intercepted savepoint block.
-        Returns (result, captured_queries, db_duration_ms).
+
+        `setup`, if provided, runs INSIDE the same transaction/savepoint (so it's
+        still rolled back) but BEFORE the QueryInterceptor attaches — this is where
+        mock-data seeding belongs. Queries issued during `setup` are never captured,
+        so they can't pollute N+1 detection or query counts for the profiled callable.
+
+        Returns (result, captured_queries, db_duration_ms, setup_result).
         """
         queries_captured = []
         db_duration = 0.0
         result = None
-        
+        setup_result = None
+
         with transaction.atomic():
             sid = transaction.savepoint()
             try:
+                # Seeding / setup happens here, inside the rollback boundary, outside the query interceptor.
+                if setup is not None:
+                    setup_result = setup()
+
                 with QueryInterceptor() as interceptor:
                     db_start = time.perf_counter()
                     result = func(*args, **kwargs)
@@ -125,8 +142,8 @@ class DjangoSandboxRunner:
                     queries_captured = interceptor.captured_queries
             finally:
                 transaction.savepoint_rollback(sid)
-                
-        return result, queries_captured, db_duration
+
+        return result, queries_captured, db_duration, setup_result
 
     def execute_isolated(
         self,
@@ -166,20 +183,22 @@ class DjangoSandboxRunner:
         side_effect_warnings = self._detect_side_effects(resolved_match.func)
 
         start_time = time.perf_counter()
-
         try:
-            # Wrap the specific mock generation and request building logic into a callable
-            def _sandbox_execution():
+            # Seeding now happens BEFORE the interceptor attaches (see profile_callable's `setup` param) — its INSERT queries are never captured, so they can't inflate query counts or trigger false N+1 flags.
+            def _seed():
                 seeded_info = []
                 if seed_count > 0 and target_model:
                     model_class = apps.get_model(target_model)
                     created_instances = baker.make(model_class, _quantity=seed_count)
-                    
+
                     if not isinstance(created_instances, list):
                         created_instances = [created_instances]
-                        
-                    seeded_info = [{"pk": obj.pk, "__str__": str(obj)} for obj in created_instances]
 
+                    seeded_info = [{"pk": obj.pk, "__str__": str(obj)} for obj in created_instances]
+                return seeded_info
+
+            # Only request construction + view execution runs inside the interceptor.
+            def _sandbox_execution():
                 if method in {"POST", "PUT", "PATCH"} and data is not None:
                     request = request_func(resolved_path, data=json.dumps(data), content_type=content_type)
                 else:
@@ -189,15 +208,17 @@ class DjangoSandboxRunner:
                 request.resolver_match = resolved_match
 
                 response = resolved_match.func(request, *resolved_match.args, **resolved_match.kwargs)
-                
+
                 if isinstance(response, Response) and hasattr(response, "render"):
                     response.render()
-                    
-                return response, seeded_info
 
-            # Execute the view wrapped in our new DB-driver interceptor
-            result_tuple, queries_captured, db_duration = self.profile_callable(_sandbox_execution)
-            response, seeded_records_info = result_tuple
+                return response
+
+            # Execute the view wrapped in our DB-driver interceptor; seeding runs first, inside the same rollback boundary, outside the interceptor.
+            response, queries_captured, db_duration, seeded_records_info = self.profile_callable(
+                _sandbox_execution, setup=_seed
+            )
+            seeded_records_info = seeded_records_info or []
             status_code = getattr(response, "status_code", 200)
             response_body = self._parse_response_body(response)
 
@@ -216,13 +237,13 @@ class DjangoSandboxRunner:
             sql_text = q["sql"]
             formatted_queries.append({
                 "sql": sql_text,
+                # NOTE: detect_n_plus_one() re-fingerprints internally from "sql" and never reads this key, kept here for the ExecutionResult payload returned to callers (e.g. the MCP layer, UI), not for the analyzer.
                 "fingerprint": fingerprint(sql_text),
                 "time_ms": q["time_ms"],
-                "src_loc": q.get("src_loc"),
+                "source_location": q.get("source_location"),
             })
 
         n_plus_one_groups = detect_n_plus_one(formatted_queries, threshold=3, relationships=relationships)
-        
         analysis_payload = []
         for group in n_plus_one_groups:
             fp = group["fingerprint"]
