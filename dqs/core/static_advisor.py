@@ -70,13 +70,22 @@ class StaticASTAdvisor(ast.NodeVisitor):
         call_repr = self._get_call_name(node)
 
         # 1. ORM Call Inside Loop Detection
-        if self._loop_depth > 0 and self._is_orm_call(node, call_repr):
-            self.findings.append({
-                "type": "ORM_CALL_IN_LOOP",
-                "message": f"Potential N+1 query pattern: ORM call '{call_repr}' detected inside a loop at line {node.lineno}.",
-                "line": node.lineno,
-                "severity": "high",
-            })
+        if self._loop_depth > 0:
+            is_orm, confidence = self._is_orm_call(node, call_repr)
+            if is_orm:
+                severity = "high" if confidence == "high" else "low"
+                message = (
+                    f"Potential N+1 query pattern: ORM call '{call_repr}' detected inside a loop at line {node.lineno}."
+                    if confidence == "high"
+                    else f"Possible N+1 query pattern: '{call_repr}' inside a loop at line {node.lineno} — "
+                        f"method name matches common ORM calls, but receiver isn't confirmed as a queryset/manager."
+                )
+                self.findings.append({
+                    "type": "ORM_CALL_IN_LOOP",
+                    "message": message,
+                    "line": node.lineno,
+                    "severity": severity,
+                })
 
         # 2. Blocking Network / Sync Call Detection
         if self._is_blocking_call(call_repr):
@@ -89,20 +98,32 @@ class StaticASTAdvisor(ast.NodeVisitor):
 
         self.generic_visit(node)
 
-    def _is_orm_call(self, node: ast.Call, call_repr: str) -> bool:
-        """Determines if a call node is a Django ORM query using AST structure."""
-        # Check 1: Explicit Manager Access (e.g., User.objects.filter or self.queryset.filter)
-        if ".objects." in call_repr or call_repr.startswith("objects."):
-            return True
+    # Name fragments that strongly suggest the receiver is a queryset/manager, used to upgrade confidence on generically-named methods like .get()/.filter() that would otherwise false-positive on any unrelated class with those methods.
+    _QUERYSET_HINT_FRAGMENTS = ("queryset", "_set", "qs", "manager")
 
-        # Check 2: Attribute method matching against ORM keywords (e.g., qs.filter())
+    def _is_orm_call(self, node: ast.Call, call_repr: str) -> tuple:
+        """
+        Determines if a call node is a Django ORM query using AST structure.
+        Returns (is_match, confidence) — confidence is "high" or "low".
+        "low" confidence findings are still reported, but at reduced severity,
+        since generic method names (.get(), .filter(), .all()) are common on
+        non-Django classes too and shouldn't be flagged as loudly.
+        """
+        # High confidence: explicit manager access — unambiguous Django pattern.
+        if ".objects." in call_repr or call_repr.startswith("objects."):
+            return True, "high"
+
         if isinstance(node.func, ast.Attribute):
             method_name = node.func.attr
             if method_name in DJANGO_ORM_METHODS:
-                # Ensures it's chained on an attribute call (e.g. obj.filter), not a plain function filter()
-                return True
+                # Upgrade confidence if the receiver's name hints at a queryset/manager (e.g. `author.book_set.all()`, `self.queryset.filter()`, `qs.filter()`).
+                receiver = self._unparse_node(node.func.value).lower()
+                if any(hint in receiver for hint in self._QUERYSET_HINT_FRAGMENTS):
+                    return True, "high"
+                # Otherwise it's a generic name match — real but low-confidence.
+                return True, "low"
 
-        return False
+        return False, None
 
     def _is_blocking_call(self, call_repr: str) -> bool:
         """Checks if the call representation starts with a known blocking I/O prefix."""
