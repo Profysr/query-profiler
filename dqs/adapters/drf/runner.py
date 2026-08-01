@@ -32,20 +32,20 @@ ELI5 PSEUDO-FORMAT FLOW MAP (How DjangoSandboxRunner works step-by-step):
       "sql": "SELECT \"library_book\".\"id\", \"library_book\".\"title\" FROM \"library_book\"",
       "fingerprint": "SELECT T0.id, T0.title FROM library_book AS T0",
       "time_ms": 1.2,
-      "source_location": "api/views.py:28"
+      "src_loc": "api/views.py:28"
     },
     {
       "sql": "SELECT \"library_author\".\"id\", \"library_author\".\"name\" FROM \"library_author\" WHERE \"library_author\".\"id\" = 1",
       "fingerprint": "SELECT T0.id, T0.name FROM library_author AS T0 WHERE T0.id = ?",
       "time_ms": 0.9,
-      "source_location": "api/serializers.py:15"
+      "src_loc": "api/serializers.py:15"
     }
   ],
   "analysis": [
     {
       "fingerprint": "SELECT T0.id, T0.name FROM library_author AS T0 WHERE T0.id = ?",
       "count": 3,
-      "source_location": "api/serializers.py:15",
+      "src_loc": "api/serializers.py:15",
       "suggestion": "Potential N+1 detected on table 'library_author' at `api/serializers.py:15`. Fix by appending `.select_related('author')` to your base queryset.",
       "sample_queries": [
         "SELECT \"library_author\".\"id\", \"library_author\".\"name\" FROM \"library_author\" WHERE \"library_author\".\"id\" = 1",
@@ -218,7 +218,7 @@ class DjangoSandboxRunner:
                 "sql": sql_text,
                 "fingerprint": fingerprint(sql_text),
                 "time_ms": q["time_ms"],
-                "source_location": q.get("source_location"),
+                "src_loc": q.get("src_loc"),
             })
 
         n_plus_one_groups = detect_n_plus_one(formatted_queries, threshold=3, relationships=relationships)
@@ -229,7 +229,7 @@ class DjangoSandboxRunner:
             analysis_payload.append({
                 "fingerprint": fp,
                 "count": group["count"],
-                "source_location": group.get("source_location"),
+                "src_loc": group.get("src_loc"),
                 "suggestion": group.get("suggestion"),
                 "sample_queries": group.get("sample_queries", []),
             })

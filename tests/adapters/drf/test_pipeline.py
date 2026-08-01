@@ -43,15 +43,15 @@ class DQSPipelineTestCase(TestCase):
 
     def test_n_plus_one_detection_and_suggestions(self):
         queries = [
-            {"sql": "SELECT * FROM author WHERE id = 1", "time": 0.5, "source_location": "views.py:10"},
-            {"sql": "SELECT * FROM author WHERE id = 2", "time": 0.4, "source_location": "views.py:10"},
-            {"sql": "SELECT * FROM author WHERE id = 3", "time": 0.6, "source_location": "views.py:10"},
+            {"sql": "SELECT * FROM author WHERE id = 1", "time": 0.5, "src_loc": "views.py:10"},
+            {"sql": "SELECT * FROM author WHERE id = 2", "time": 0.4, "src_loc": "views.py:10"},
+            {"sql": "SELECT * FROM author WHERE id = 3", "time": 0.6, "src_loc": "views.py:10"},
         ]
         
         flags = detect_n_plus_one(queries, threshold=3)
         self.assertEqual(len(flags), 1)
         self.assertEqual(flags[0]["count"], 3)
-        self.assertEqual(flags[0]["source_location"], "views.py:10")
+        self.assertEqual(flags[0]["src_loc"], "views.py:10")
         self.assertIn("select_related", flags[0]["suggestion"])
 
     # ==========================================

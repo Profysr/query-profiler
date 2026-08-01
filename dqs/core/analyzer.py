@@ -77,14 +77,14 @@ def fingerprint(raw_sql: str) -> str:
 def suggest_fix(
     fp: str,
     relationships: Optional[Dict[str, Dict[str, str]]] = None,
-    source_location: Optional[str] = None,
+    src_loc: Optional[str] = None,
 ) -> str:
     """Generates a plain-English Django ORM optimization recommendation.
 
     :param fp: The AST fingerprint string of the repeated query.
     :param relationships: Mapping from table names to model relationship
       metadata.
-    :param source_location: File and line number where the query originated
+    :param src_loc: File and line number where the query originated
       (e.g., 'views.py:42').
     """
     target_table = None
@@ -98,7 +98,7 @@ def suggest_fix(
     except Exception:
         pass
 
-    loc_prefix = f" at `{source_location}`" if source_location else ""
+    loc_prefix = f" at `{src_loc}`" if src_loc else ""
 
     # Match against known introspection metadata if provided
     if relationships and target_table and target_table in relationships:
@@ -141,16 +141,16 @@ def detect_n_plus_one(
     flags = []
     for fp, group in groups.items():
         if len(group) >= threshold and fp.strip().upper().startswith("SELECT"):
-            # Extract source_location if present in the captured query dictionary
+            # Extract src_loc if present in the captured query dictionary
             first_query = group[0]
-            source_loc = first_query.get("source_location")
+            source_loc = first_query.get("src_loc")
 
             flags.append({
                 "fingerprint": fp,
                 "count": len(group),
-                "source_location": source_loc,
+                "src_loc": source_loc,
                 "suggestion": suggest_fix(
-                    fp, relationships, source_location=source_loc
+                    fp, relationships, src_loc=source_loc
                 ),
                 "sample_queries": [q["sql"] for q in group[:2]],
             })

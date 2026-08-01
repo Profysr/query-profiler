@@ -37,7 +37,7 @@ class QueryInterceptor:
             self.captured_queries.append({
                 "sql": sql,
                 "time_ms": duration if duration >= 1.0 else duration,
-                "source_location": source_loc,
+                "src_loc": source_loc,
             })
 
     def _extract_source_location(self) -> Optional[str]:
