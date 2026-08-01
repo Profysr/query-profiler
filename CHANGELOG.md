@@ -83,3 +83,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `_detect_side_effects()` still inspects `as_view()`'s dispatch wrapper for class-based views rather than the actual `get()`/`post()` handlers, so side-effect detection on CBVs remains unreliable. Slated to be superseded by the whole-codebase static AST advisor in v0.25.0, not patched here.
 - Query capture remains `CaptureQueriesContext`-based; the DB-driver-boundary interceptor lands in v0.25.0.
+
+## [0.25.0] - 2026-07-01 — Query Interceptor, Target Abstraction & Static AST Advisor
+
+### Added
+
+- **`Target` abstraction (`dqs/core/targets.py`)**: New unified dataclass (`id`, `kind`, `triggerable`, `trigger_spec`, `static_findings`) representing anything that can execute code — a view, a signal receiver, or a Celery task — under one consistent shape. This is what lets both the human-facing UX and the future MCP layer operate on one interface instead of a different code path per "kind" of triggerable code.
+
+- **DB-driver-boundary query interceptor (`dqs/adapters/drf/query_interceptor.py`)**: New `QueryInterceptor` context manager, hooking directly into `connection.execute_wrapper()` instead of `CaptureQueriesContext`. Captures SQL, precise execution time, and — via call-stack inspection at the exact moment a query fires — the originating file/line in user code. This supersedes the request-boundary capture used since v0.2.0 and is framework-agnostic about *what* triggered the query.
+
+- **General-purpose profiling (`DjangoSandboxRunner.profile_callable`)**: New method that runs *any* Python callable inside a transaction savepoint with the query interceptor attached, not just HTTP views. `execute_isolated()` is now one caller of `profile_callable()` — supplying "build a request, call the view" as the callable — rather than a separate, duplicated code path. Also accepts an optional `setup` callable that runs inside the same rollback boundary but *before* the interceptor attaches, so mock-data seeding is correctly excluded from captured query counts and N+1 analysis.
+
+- **Whole-codebase static AST advisor (`dqs/core/static_advisor.py`)**: New `StaticASTAdvisor`, a pure AST scanner requiring no execution and no DB connection. Ships with two checks:
+  - **ORM-call-inside-loop detection** — flags `.filter()`/`.get()`/`.all()`-style calls found inside a `for`/`async for` block as a potential N+1 pattern, independent of whether that code has any discoverable entry point at all.
+  - **Blocking-call detection** — flags `requests.post`, `smtplib.SMTP`, `time.sleep`, and similar synchronous I/O calls. Resolves `import X as Y` and `from X import Y` aliasing via tracked import maps before matching, so `import requests as r; r.post(...)` and `from smtplib import SMTP; SMTP(...)` are correctly caught instead of silently bypassing detection.
+  - `_detect_side_effects()` in `runner.py` now delegates to this advisor instead of its own separate keyword grep, unifying side-effect detection under one engine.
+
+- **Target discovery engine (`dqs/adapters/drf/discovery.py`)**: New `DjangoTargetDiscovery.discover_all()`:
+  - Converts previously introspected URL routes into `Target(kind="view")` records.
+  - Walks Django's `post_save` / `pre_save` / `post_delete` / `pre_delete` signal registries (safely unpacking `weakref` receivers) into `Target(kind="signal")` records.
+  - Walks the Celery task registry into `Target(kind="task")` records.
+  - Every discovered signal and task callable is fed through `StaticASTAdvisor` via `_analyze_callable_statically()`, populating `static_findings` even for code with no URL and no execution path yet — this is what lets an agent get *something* actionable on code DQS can't trigger.
+
+### Fixed (caught during this phase's development, before release)
+
+- **Seed data isolation**: An early version of the `profile_callable()`/`execute_isolated()` refactor ran mock-data seeding *inside* the same block the query interceptor was attached to, which would have silently inflated query counts and could trigger false N+1 flags from seed `INSERT` statements. Corrected by routing seeding through the new `setup` parameter, which runs inside the rollback boundary but strictly before interception begins.
+- **Import-alias blind spot in blocking-call detection**: Initial implementation matched blocking calls via literal string prefixes (`"requests.post"`), which missed any aliased or `from`-style import. Added `visit_Import`/`visit_ImportFrom` tracking and alias resolution so detection works regardless of import style.
+
+### Known Limitations (explicitly deferred, not oversights)
+
+- `DJANGO_ORM_METHODS` matches on generic method names (`get`, `filter`, `all`, `create`, etc.) — any non-Django class exposing similarly named methods and called inside a loop will currently produce a false-positive `ORM_CALL_IN_LOOP` finding.
+- Schema-level checks (cross-referencing `Meta.indexes`/`db_index` against `.filter()`/`.exclude()`/`.order_by()` call sites) are not yet implemented.
+- PK strategy advice (flagging auto-increment integer PKs on write-heavy models, suggesting UUIDv7) is not yet implemented.
+- WebSocket/Channels consumer discovery is not yet implemented — no `Target(kind="consumer")` records are produced.
+- Signals and Celery tasks are discovered and marked `triggerable=True`, but no execution path exists yet to actually synthesize a signal-triggering event or invoke a task by name from `trigger_spec` — discovery and triggerability are currently decoupled. This is the next piece of work.
+
+## [0.25.1] - 2026-07-02
+
+### Fixed
+
+- **Seed data no longer pollutes query capture (`runner.py`)**: `profile_callable()` now accepts an optional `setup` callable that runs inside the same transaction/savepoint but *before* `QueryInterceptor` attaches. `execute_isolated()`'s mock-data seeding moved into this `setup` step, so seed `INSERT` queries can no longer be captured, inflate query counts, or trigger false N+1 flags on the profiled endpoint's own queries. This was a silent correctness bug affecting every `execute_isolated()` call that used `seed_count > 0`.
+
+- **Blocking-call detection now resolves import aliases (`static_advisor.py`)**: `StaticASTAdvisor` now tracks `import X as Y` and `from X import Y` statements via new `visit_Import()`/`visit_ImportFrom()` handlers, and resolves call names through this map before matching against `BLOCKING_CALL_PREFIXES`. Previously, aliased or `from`-imports (`import requests as r; r.post(...)`, `from smtplib import SMTP; SMTP(...)`) silently bypassed detection entirely — this was an explicitly named requirement in the v0.25.0 roadmap that wasn't met in the initial implementation.
+
+### Verified (no change needed)
+
+- Confirmed `analyzer.py`'s `detect_n_plus_one()` never reads query timing data (`time`/`time_ms`) — it only uses `sql` and `source_location`. The `runner.py` → `analyzer.py` payload handoff is fully compatible as-is; no shim required.
+
+### Known limitation (documented, not fixed)
+
+- Import-alias resolution in `static_advisor.py` is single-pass and order-dependent — an import appearing *after* its use in source order won't be resolved. Not expected to matter for standard top-of-file imports.

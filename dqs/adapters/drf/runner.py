@@ -82,7 +82,8 @@ from rest_framework.test import APIRequestFactory
 
 from dqs.core.analyzer import fingerprint, detect_n_plus_one, suggest_fix
 from dqs.adapters.drf.query_interceptor import QueryInterceptor
-# Import the AST Advisor to replace the old string-matching logic
+from django.db.models.signals import post_save, pre_save, post_delete, pre_delete
+from dqs.core.targets import Target
 from dqs.core.static_advisor import StaticASTAdvisor 
 
 @dataclass
@@ -274,6 +275,94 @@ class DjangoSandboxRunner:
             side_effect_warnings=side_effect_warnings,
         )
 
+    # Maps a signal's string name (as stored in Target.trigger_spec) back to the actual Django Signal object needed to know which model event to fire.
+    _SIGNAL_NAME_MAP = {
+        "post_save": post_save,
+        "pre_save": pre_save,
+        "post_delete": post_delete,
+        "pre_delete": pre_delete,
+    }
+
+    def trigger_signal_target(self, target: Target) -> ExecutionResult:
+        """
+        Synthesizes the model event a signal receiver listens for, so the
+        receiver actually fires and its queries get captured — all inside
+        the same rollback boundary as everything else.
+        """
+        spec = target.trigger_spec or {}
+        signal_name = spec.get("signal")
+        sender_model_path = spec.get("sender_model")
+
+        if not target.triggerable or not sender_model_path:
+            return ExecutionResult(
+                route=target.id,
+                status_code=400,
+                error="Signal target is not triggerable — no resolvable sender model.",
+            )
+
+        try:
+            model_class = apps.get_model(sender_model_path)
+        except Exception as e:
+            return ExecutionResult(route=target.id, status_code=400, error=f"Could not resolve sender model: {e}")
+
+        def _fire_signal():
+            # baker.make() naturally fires pre_save/post_save on creation.
+            # For post_delete/pre_delete, create first (untracked by the interceptor via `setup` in the caller), then delete here so the delete signal and only the delete signal — is captured.
+            if signal_name in ("post_delete", "pre_delete"):
+                instance = baker.make(model_class)
+                instance.delete()
+                return {"action": "delete", "model": sender_model_path}
+            else:
+                instance = baker.make(model_class)
+                return {"action": "save", "model": sender_model_path, "pk": instance.pk}
+
+        result, queries_captured, db_duration, _ = self.profile_callable(_fire_signal)
+        return self._build_execution_result(
+            route=target.id,
+            status_code=200,
+            queries_captured=queries_captured,
+            db_duration=db_duration,
+            total_duration=db_duration,
+            response_body=result,
+            seeded_records_info=[],
+            side_effect_warnings=[],
+        )
+
+    def trigger_task_target(self, target: Target, *task_args, **task_kwargs) -> ExecutionResult:
+        """
+        Calls a discovered Celery task directly in-process (not via the broker),
+        so it runs synchronously inside the same interceptor + rollback boundary.
+        """
+        spec = target.trigger_spec or {}
+        task_name = spec.get("task_name")
+
+        try:
+            from celery import current_app
+            task_func = current_app.tasks.get(task_name)
+        except ImportError:
+            return ExecutionResult(route=target.id, status_code=400, error="Celery is not installed.")
+
+        if task_func is None:
+            return ExecutionResult(route=target.id, status_code=404, error=f"Task '{task_name}' not found in registry.")
+
+        try:
+            result, queries_captured, db_duration, _ = self.profile_callable(
+                task_func.run, *task_args, **task_kwargs
+            )
+        except Exception as e:
+            return ExecutionResult(route=target.id, status_code=500, error=f"Exception raised inside task: {e}")
+
+        return self._build_execution_result(
+            route=target.id,
+            status_code=200,
+            queries_captured=queries_captured,
+            db_duration=db_duration,
+            total_duration=db_duration,
+            response_body=result,
+            seeded_records_info=[],
+            side_effect_warnings=[],
+        )
+
     def _parse_response_body(self, response: Any) -> Optional[Any]:
         if hasattr(response, "data"):
             return response.data
@@ -285,6 +374,60 @@ class DjangoSandboxRunner:
         except (ValueError, UnicodeDecodeError):
             return None
 
+    def _build_execution_result(
+        self,
+        route: str,
+        status_code: int,
+        queries_captured: List[Dict[str, Any]],
+        db_duration: float,
+        total_duration: float,
+        response_body: Any,
+        seeded_records_info: List[Dict[str, Any]],
+        side_effect_warnings: List[str],
+        relationships: Optional[Dict[str, str]] = None,
+    ) -> ExecutionResult:
+        """Shared formatting/N+1-analysis path for any trigger method (view, signal, task)."""
+        formatted_queries = []
+        for q in queries_captured:
+            sql_text = q["sql"]
+            formatted_queries.append({
+                "sql": sql_text,
+                "fingerprint": fingerprint(sql_text),
+                "time_ms": q["time_ms"],
+                "source_location": q.get("source_location"),
+            })
+
+        n_plus_one_groups = detect_n_plus_one(formatted_queries, threshold=3, relationships=relationships)
+        analysis_payload = [
+            {
+                "fingerprint": group["fingerprint"],
+                "count": group["count"],
+                "source_location": group.get("source_location"),
+                "suggestion": group.get("suggestion"),
+                "sample_queries": group.get("sample_queries", []),
+            }
+            for group in n_plus_one_groups
+        ]
+
+        metrics = {
+            "total_time_ms": round(total_duration, 2),
+            "db_time_ms": round(db_duration, 2),
+            "total_queries": len(queries_captured),
+            "unique_fingerprints": len(set(q["fingerprint"] for q in formatted_queries)),
+            "n_plus_one_detected": len(n_plus_one_groups) > 0,
+        }
+
+        return ExecutionResult(
+            route=route,
+            status_code=status_code,
+            metrics=metrics,
+            queries=formatted_queries,
+            analysis=analysis_payload,
+            response_body=response_body,
+            seeded_records=seeded_records_info,
+            side_effect_warnings=side_effect_warnings,
+        )
+        
     def _detect_side_effects(self, view_func: Any) -> List[str]:
         """
         Uses the framework-agnostic AST scanner to safely detect side effects 

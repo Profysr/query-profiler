@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional
 from django.db.models.signals import post_save, pre_save, post_delete, pre_delete
 from dqs.core.targets import Target
 from dqs.core.static_advisor import StaticASTAdvisor
+from django.apps import apps
 import weakref
 
 logger = logging.getLogger("dqs")
@@ -54,7 +55,6 @@ class DjangoTargetDiscovery:
 
         for sig_name, signal_obj in signal_mappings:
             try:
-                # Django stores receivers as a list of tuples: (lookup_key, receiver_reference)
                 for lookup_key, receiver_ref in signal_obj.receivers:
                     
                     # 1. Unwrap the actual function from memory
@@ -70,13 +70,24 @@ class DjangoTargetDiscovery:
                     # 3. Safely get the name of the function
                     func_name = getattr(func_obj, "__name__", "anonymous_receiver")
 
+                    # 4. Resolve which model actually triggers this signal —
+                    #    without this, there's no way to synthesize a trigger event.
+                    sender_id = lookup_key[1] if isinstance(lookup_key, tuple) and len(lookup_key) > 1 else None
+                    sender_model = self._resolve_sender_model(sender_id)
+
+                    # Wildcard receivers (sender=None, fire on ANY model) can't be
+                    # safely auto-triggered — we'd have to guess which model to
+                    # save/delete. Mark them discovered but not triggerable.
+                    is_triggerable = sender_model is not None
+
                     targets.append(Target(
                         id=f"signal:{sig_name}:{func_name}",
                         kind="signal",
-                        triggerable=True,
+                        triggerable=is_triggerable,
                         trigger_spec={
                             "signal": sig_name,
                             "receiver": func_name,
+                            "sender_model": sender_model,
                         },
                         static_findings=self._analyze_callable_statically(func_obj),
                     ))
@@ -113,3 +124,16 @@ class DjangoTargetDiscovery:
             return advisor.run()
         except (TypeError, OSError, Exception):
             return []
+
+    def _resolve_sender_model(self, sender_id: Optional[int]) -> Optional[str]:
+        """
+        Django stores signal sender association as id(sender_class), not the class itself. Reverse-resolve it back to 'app_label.ModelName' by scanning installed models, this is what makes a signal actually
+        triggerable later (we need to know which model to save/delete).
+        Returns None for wildcard receivers (sender=None, applies to all senders).
+        """
+        if sender_id is None:
+            return None
+        for model in apps.get_models():
+            if id(model) == sender_id:
+                return f"{model._meta.app_label}.{model._meta.object_name}"
+        return None
