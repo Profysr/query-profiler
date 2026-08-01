@@ -28,6 +28,7 @@ class StaticASTAdvisor(ast.NodeVisitor):
         self.findings: List[Dict[str, Any]] = []
         self._loop_depth = 0
         self.import_map: Dict[str, str] = {}
+        self.queried_fields: List[str] = []
 
     def run(self) -> List[Dict[str, Any]]:
         try:
@@ -95,6 +96,16 @@ class StaticASTAdvisor(ast.NodeVisitor):
                 "line": node.lineno,
                 "severity": "medium",
             })
+
+        # 3. Collect field names from filter/exclude/order_by calls, regardless of loop depth — used by schema_advisor.py for missing-index checks.
+        method_name = node.func.attr if isinstance(node.func, ast.Attribute) else None
+        if method_name in ("filter", "exclude", "order_by"):
+            for kw in node.keywords:
+                if kw.arg:
+                    self.queried_fields.append(kw.arg.split("__")[0])
+            for arg in node.args:
+                if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                    self.queried_fields.append(arg.value)
 
         self.generic_visit(node)
 
