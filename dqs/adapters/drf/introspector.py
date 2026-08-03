@@ -122,44 +122,9 @@ class DjangoIntrospector:
                 if route_meta:
                     routes.append(route_meta)
 
-    # Dictionary to map Django field types to simple string formats
-    _FIELD_TYPE_MAP = {
-        "AutoField": "int", "BigAutoField": "int", "SmallAutoField": "int",
-        "IntegerField": "int", "BigIntegerField": "int", "SmallIntegerField": "int",
-        "PositiveIntegerField": "int", "PositiveBigIntegerField": "int", "PositiveSmallIntegerField": "int",
-        "UUIDField": "uuid", "SlugField": "slug", "CharField": "str", "TextField": "str",
-    }
-
-    def _resolve_param_type_from_model(self, param_name: str, target_model: Optional[str]) -> Optional[str]:
-        """Helper to guess URL variable types (like 'pk') by looking at the database model fields."""
-        if not target_model:
-            return None
-        try:
-            app_label, model_name = target_model.split(".")
-            model = apps.get_model(app_label, model_name)
-            field = model._meta.pk if param_name in ("pk", "id") else model._meta.get_field(param_name)
-            return self._FIELD_TYPE_MAP.get(field.get_internal_type())
-        except Exception:
-            return None
-
-    def _extract_path_params(self, pattern: URLPattern, target_model: Optional[str]) -> List[PathParam]:
-        """Step 5: Extracts variables inside the URL path (e.g., /books/<int:pk>/ -> pk: int)."""
-        route_pattern = pattern.pattern
-        params: List[PathParam] = []
-
-        if isinstance(route_pattern, RoutePattern):
-            # Modern path() routes directly expose converters
-            for name, converter in route_pattern.converters.items():
-                converter_name = type(converter).__name__.replace("Converter", "").lower() or "str"
-                params.append(PathParam(name=name, converter=converter_name))
-        else:
-            # Older regex routes require matching variables back to model fields
-            group_names = getattr(getattr(route_pattern, "regex", None), "groupindex", {})
-            for name in group_names:
-                resolved_type = self._resolve_param_type_from_model(name, target_model)
-                params.append(PathParam(name=name, converter=resolved_type or "unknown"))
-
-        return params
+    def _extract_path_params(self, pattern: URLPattern) -> List[PathParam]:
+        """Extracts URL parameters from modern Django RoutePattern converters."""
+        return PathConverterResolver.extract_converters_from_pattern(pattern)
 
     def _analyze_view(self, pattern: URLPattern, full_path: str) -> Optional[RouteMetadata]:
         """Step 3 (cont.): Inspects a specific view function to ensure it's a valid DRF API."""
@@ -194,7 +159,7 @@ class DjangoIntrospector:
 
         # Step 4: Extract model and path parameters
         target_model = self._extract_model_from_class(view_class)
-        path_params = self._extract_path_params(pattern, target_model)
+        path_params = self._extract_path_params(pattern)
 
         # Determine HTTP methods allowed (GET, POST, etc.)
         if hasattr(view_class, "get_queryset") and hasattr(callback, "actions"):
@@ -223,6 +188,20 @@ class DjangoIntrospector:
             reason_unexecutable=reason,
             view_callable=original_callable,
         )
+
+    def extract_view_lookup_map(self, view_class: Optional[Type]) -> Dict[str, str]:
+        """
+        Inspects DRF view class for lookup_url_kwarg and lookup_field mappings
+        (e.g., article_slug -> slug, or pk -> id).
+        """
+        if view_class is None:
+            return {}
+
+        lookup_field = getattr(view_class, "lookup_field", "pk")
+        lookup_url_kwarg = getattr(view_class, "lookup_url_kwarg", None) or lookup_field
+        
+        # Maps the parameter name as it appears in the URL to the model field name
+        return {lookup_url_kwarg: lookup_field}
 
     def _extract_model_from_class(self, view_class: Type) -> Optional[str]:
         """Step 4 (cont.): Figures out which database model this view talks to."""

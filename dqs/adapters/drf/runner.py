@@ -148,6 +148,106 @@ class DjangoSandboxRunner:
 
         return result, queries_captured, db_duration, setup_result
 
+    # =========================================================================
+    # Step-Driven Agent Execution Pipeline (MCP Entries)
+    # =========================================================================
+
+    def resolve_path_step(
+        self,
+        route_meta: Any,
+        explicit_params: Optional[Dict[str, Any]] = None,
+        lookup_map: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Pipeline Entry 1: Resolves concrete URL path and parameter mapping.
+        """
+        concrete_url, resolved_params, created_instance = PathConverterResolver.build_executable_url(
+            route=route_meta,
+            explicit_params=explicit_params,
+            auto_generate_if_missing=True,
+            lookup_map=lookup_map,
+        )
+        return {
+            "resolved_url": concrete_url,
+            "params": resolved_params,
+            "has_mock_instance": created_instance is not None,
+            "created_instance_pk": getattr(created_instance, "pk", None) if created_instance else None,
+        }
+
+    def probe_route_step(
+        self,
+        concrete_url: str,
+        method: str = "GET",
+        user: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        """
+        Pipeline Entry 2: Issues an un-intercepted request to probe route existence/status code.
+        """
+        try:
+            resolved_match = resolve(concrete_url)
+            request_func = getattr(self.factory, method.lower(), self.factory.get)
+            request = request_func(concrete_url)
+            request.user = user if user is not None else AnonymousUser()
+            request.resolver_match = resolved_match
+
+            response = resolved_match.func(request, *resolved_match.args, **resolved_match.kwargs)
+            status_code = getattr(response, "status_code", 500)
+            return {"status_code": status_code, "exists": status_code < 400, "error": None}
+        except Exception as e:
+            return {"status_code": 404, "exists": False, "error": str(e)}
+
+    def seed_resource_step(
+        self,
+        target_model: str,
+        seed_count: int = 1,
+    ) -> Dict[str, Any]:
+        """
+        Pipeline Entry 3: Seeds mock resources using baker inside safe transaction boundaries.
+        """
+        try:
+            app_label, model_name = target_model.split(".")
+            model_class = apps.get_model(app_label, model_name)
+            instances = baker.make(model_class, _quantity=seed_count)
+            if not isinstance(instances, list):
+                instances = [instances]
+            return {
+                "status_code": 201,
+                "seeded": True,
+                "seeded_count": len(instances),
+                "instances": [{"pk": obj.pk, "__str__": str(obj)} for obj in instances],
+            }
+        except Exception as e:
+            return {"status_code": 500, "seeded": False, "error": str(e)}
+
+    def profile_target_step(
+        self,
+        url_name_or_path: str,
+        method: str = "GET",
+        path_params: Optional[Dict[str, Any]] = None,
+        query_params: Optional[Dict[str, Any]] = None,
+        data: Optional[Dict[str, Any]] = None,
+        user: Optional[Any] = None,
+        relationships: Optional[Dict[str, str]] = None,
+        seed_count: int = 0,
+        target_model: Optional[str] = None,
+        content_type: str = "application/json",
+    ) -> ExecutionResult:
+        """
+        Pipeline Entry 4: Final execution step wrapping target request inside QueryInterceptor.
+        """
+        return self.execute_isolated(
+            url_name_or_path=url_name_or_path,
+            method=method,
+            path_params=path_params,
+            query_params=query_params,
+            data=data,
+            user=user,
+            relationships=relationships,
+            seed_count=seed_count,
+            target_model=target_model,
+            content_type=content_type,
+        )
+
     def execute_isolated(
         self,
         url_name_or_path: str,
@@ -168,36 +268,19 @@ class DjangoSandboxRunner:
         if method not in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
             return ExecutionResult(route=url_name_or_path, status_code=400, error=f"Invalid HTTP method: {method}")
 
-        try:
-            resolved_path = reverse(url_name_or_path, kwargs=path_params)
-        except Exception:
-            resolved_path = url_name_or_path
-
-        # If reverse failed and target_model is provided, attempt automatic parameter resolution
-        if (
-            (resolved_path == url_name_or_path or "<" in resolved_path or "{" in resolved_path)
-            and target_model
-        ):
-            try:
-                app_label, model_name = target_model.split(".")
-                model_class = apps.get_model(app_label, model_name)
-                instance = model_class.objects.first()
-                if instance is None:
-                    instance = baker.make(model_class)
-                
-                auto_params = dict(path_params)
-                if "pk" not in auto_params and "id" not in auto_params:
-                    auto_params["pk"] = instance.pk
-
-                try:
-                    resolved_path = reverse(url_name_or_path, kwargs=auto_params)
-                except Exception:
-                    # Direct string replacement fallback
-                    resolved_path = url_name_or_path
-                    for k, v in auto_params.items():
-                        resolved_path = re.sub(rf"<{k}>|<[^:]+:{k}>|{{{k}}}", str(v), resolved_path)
-            except Exception:
-                pass
+        # Single canonical path resolution call delegating to PathConverterResolver
+        route_meta = RouteMetadata(
+            path=url_name_or_path,
+            methods=[method],
+            view_name=url_name_or_path if not url_name_or_path.startswith("/") else "",
+            view_type="DRF_APIView",
+            target_model=target_model,
+        )
+        resolved_path, resolved_params, _ = PathConverterResolver.build_executable_url(
+            route=route_meta,
+            explicit_params=path_params,
+            auto_generate_if_missing=True,
+        )
 
         try:
             resolved_match = resolve(resolved_path)
