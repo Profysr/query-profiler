@@ -1,4 +1,4 @@
-# DQS — Roadmap & Build Status
+# Da Profiler — Roadmap & Build Status
 
 *Source of truth for project execution. Tracks what is completed, currently under construction, and planned — and, in this section, why any of it matters.*
 
@@ -60,7 +60,7 @@
 
 > Status: COMPLETED ✅ 
 
-### Django Adapter (`dqs/adapters/django/`)
+### Django Adapter (`dqs/adapters/drf/`)
 - [x] `apps.py` — registers `dqs.adapters.django`, hard `DEBUG=True` guardrail in `ready()`.
 - [x] `introspector.py` — `DjangoIntrospector.list_all_routes()`: recursively walks `url_patterns`, returns route metadata. Excludes `/dqs/` routes, enforces `DEBUG=True`.
 - [x] `introspector.py` — FBV and CBV cases correctly return `executable=False` + `reason_unexecutable` when methods can't be statically resolved, rather than guessing.
@@ -87,7 +87,7 @@
   - [ ] PK strategy advice (*deferred to future phase*).
   - [x] Blocking-call detection.
 
-### Django Adapter (`dqs/adapters/django/`)
+### Django Adapter (`dqs/adapters/drf/`)
 - [x] `query_interceptor.py` — wraps `connection.execute_wrapper()`. Captures `(sql, duration, origin_file, origin_function, origin_line)` per query by walking `inspect.stack()`.
 - [x] `runner.py` — refactored `execute_isolated()` to use `query_interceptor`; added new general-purpose `profile_callable(fn, *args, **kwargs)`.
 - [x] Signal-receiver discovery — walked `Signal.receivers` to populate `Target(kind="signal")`.
@@ -100,7 +100,7 @@
 
 > Status: IN PROGRESS 🟡 
 
-### Django Adapter (`dqs/adapters/django/`)
+### Django Adapter (`dqs/adapters/drf/`)
 - [ ] `converters.py` — parses `pattern.pattern.converters` to detect `int`, `str`, `slug`, `uuid` path converters.
 - [ ] `converters.py` — model resolution: explicit `view_class.queryset.model`/`view_class.model` first, FBV token-matching fallback.
 - [ ] `mock_generator.py` — `ModelBakeryGenerator.generate()`, Validation Recovery Flow, Uniqueness Guard, In-Memory Sample Cache.

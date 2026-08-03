@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "profiler"
+name = "da-profiler"
 version = "0.1.0"
-description = "Isolated query profiling and mock-data sandbox for Django REST endpoints"
+description = "Da Profiler: Isolated query profiling and mock-data sandbox for Django REST endpoints"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }

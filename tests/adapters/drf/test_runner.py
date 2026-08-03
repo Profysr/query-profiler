@@ -1,7 +1,7 @@
-# tests/adapters/django/test_runner.py
+# tests/adapters/drf/test_runner.py
 import pytest
-from django_app.sample_app.models import Author, Book, Publisher
-from dqs.adapters.django.runner import DjangoSandboxRunner, ExecutionResult
+from sample_app.models import Author, Book, Publisher
+from dqs.adapters.drf.runner import DjangoSandboxRunner, ExecutionResult
 
 
 @pytest.mark.django_db

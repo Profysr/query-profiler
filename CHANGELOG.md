@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to the **Query Sandbox (DQS)** project will be documented in this file.
+All notable changes to the **Da Profiler** project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
@@ -37,7 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Pinpoint Precision**: Update Detect N+1 function in analyzer.py to immediately tells developers where in their codebase the N+1 loop originates (e.g., Potential N+1 detected on table 'authors' at sample_app/views.py:38).
-- **Framework Decoupled**: core/analyzer.py remains 100% agnostic accepting "source_location" key from whatever payload dqs/adapters/django/runner.py sends.
+- **Framework Decoupled**: core/analyzer.py remains 100% agnostic accepting "source_location" key from whatever payload dqs/adapters/drf/runner.py sends.
 
 ---
 
@@ -58,7 +58,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Integration Test Environment (`demo_project/`)**:
   - Added relational test models (`Author`, `Book`, `Publisher`).
   - Added intentionally flawed N+1 endpoints (`NPlusOneBookListView`) for profiling validation.
-- **Adapter Test Suite (`tests/adapters/django/`)**: Added unit and integration tests covering route discovery, sandbox isolation, query capture, and transaction rollback.
+- **Adapter Test Suite (`tests/adapters/drf/`)**: Added unit and integration tests covering route discovery, sandbox isolation, query capture, and transaction rollback.
 
 ## [0.2.1] - 2026-06-29
 

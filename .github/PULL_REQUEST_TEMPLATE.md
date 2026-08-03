@@ -37,7 +37,7 @@ Closes #
 <!-- Check all that apply. If you checked both core and adapters, double check dqs/core/ still has zero Django imports. -->
 
 - [ ] `dqs/core/` (framework-agnostic — analyzer, dashboard)
-- [ ] `dqs/adapters/django/` (Django-specific)
+- [ ] `dqs/adapters/drf/` (Django-specific)
 - [ ] `demo_project/` (dev/test scaffolding only, not shipped)
 - [ ] Docs only (`README.md`, `ROADMAP.md`, `CHANGELOG.md`)
 

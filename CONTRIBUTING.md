@@ -1,6 +1,6 @@
-# Contributing to Query Sandbox (DQS)
+# Contributing to Da Profiler 🚀
 
-First off, thank you for considering contributing to Query Profiler, it means a lot. This project only gets better with more hands on it, and we'd love yours.
+First off, thank you for considering contributing to Da Profiler, it means a lot. This project only gets better with more hands on it, and we'd love yours.
 
 This guide covers everything you need to go from "I want to help" to your first merged PR.
 
@@ -91,12 +91,12 @@ Keep commits focused — one logical change per commit is easier to review than 
   ```
 
 **Adapters (`dqs/adapters/<framework>/`):**
-- Framework-specific code lives here, and only here. Django imports belong in `dqs/adapters/django/`, nowhere else.
+- Framework-specific code lives here, and only here. Django imports belong in `dqs/adapters/drf/`, nowhere else.
 - If you're building a *new* adapter (e.g. FastAPI/SQLAlchemy), open an issue first — this is also the point where `BaseIntrospector`/`BaseSandboxRunner` abstract contracts get formalized based on what the second real implementation needs, not guessed at in advance. See `CHANGELOG.md` for why this was deliberately deferred.
 
 **Tests:**
 - New logic in `dqs/core/` → add/update the matching test in `tests/test_analyzer.py`. These tests must stay Django-free — if one suddenly needs Django to pass, something has leaked across the core/adapter boundary and should be flagged in review, not merged.
-- New logic in `dqs/adapters/django/` → add/update `tests/test_introspector.py` or `tests/test_runner.py` as appropriate.
+- New logic in `dqs/adapters/drf/` → add/update `tests/test_introspector.py` or `tests/test_runner.py` as appropriate.
 - Run tests locally:
   ```bash
   docker compose run --rm web pytest

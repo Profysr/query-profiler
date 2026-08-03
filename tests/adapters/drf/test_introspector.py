@@ -1,6 +1,6 @@
-# tests/adapters/django/test_introspector.py
+# tests/adapters/drf/test_introspector.py
 import pytest
-from dqs.adapters.django.introspector import DjangoIntrospector, RouteMetadata
+from dqs.adapters.drf.introspector import DjangoIntrospector, RouteMetadata
 
 
 @pytest.mark.django_db

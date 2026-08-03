@@ -1,8 +1,8 @@
-# Query Sandbox (DQS) 🔍
+# Da Profiler 🔍
 
 > The Agentic ORM Profiler & Performance Orchestrator for Django.
 
-`Query Sandbox` (DQS) discovers your Django project's endpoints automatically, executes them in isolated, self-rolling-back transactions, and detects N+1 queries using AST-based SQL fingerprinting — then hands the result to an AI coding agent (or a human) as a prescriptive, copy-pasteable ORM fix.
+`Da Profiler` (package `dqs`) discovers your Django project's endpoints automatically, executes them in isolated, self-rolling-back transactions, and detects N+1 queries using AST-based SQL fingerprinting — then hands the result to an AI coding agent (or a human) as a prescriptive, copy-pasteable ORM fix.
 
 > ⚠️ **Note on scope:** this README reflects an active pivot from an earlier dashboard-first design toward an agent-first (MCP) design. If you're looking for the previous plain server-rendered dashboard direction, that's now a v1.0.0 optional feature rather than the core v0.4.0 deliverable — see [Roadmap](#project-status--roadmap).
 
@@ -56,7 +56,7 @@ Traditional profilers (Django Silk, Django Debug Toolbar) are reactive and human
 - **Dynamic route resolution** — profiles routes with path converters (`/books/<int:pk>/`) by generating a real mock row and substituting a concrete value automatically.
 - **Actionable fix suggestions** — flags queries repeated 3+ times with the same fingerprint and suggests the exact ORM fix.
 - **Agentic MCP server** — lets an AI IDE agent call `list_django_routes`, `profile_endpoint`, and `seed_mock_data` directly, closing the loop from detection to fix to re-verification without a human in the middle.
-- **Extensible by design** — a framework-agnostic core (`dqs/core/`) stays fully decoupled from Django-specific code (`dqs/adapters/django/`).
+- **Extensible by design** — a framework-agnostic core (`dqs/core/`) stays fully decoupled from Django-specific code (`dqs/adapters/drf/`).
 
 ---
 
@@ -231,23 +231,15 @@ docker compose run --rm web pytest
 ```
 tests/
 ├── test_analyzer.py       # dqs/core/analyzer.py — pure functions, no Django needed
-├── test_introspector.py   # dqs/adapters/django/introspector.py
-└── test_runner.py         # dqs/adapters/django/runner.py — needs the demo_project DB
+├── test_introspector.py   # dqs/adapters/drf/introspector.py
+└── test_runner.py         # dqs/adapters/drf/runner.py — needs the demo_project DB
 ```
 
 ---
 
 ## Project Status & Roadmap
 
-| Phase | Description | Status |
-|---|---|---|
-| v0.1.0 | Infra Scaffolding & Core AST Analyzer | ✅ Completed |
-| v0.2.0 | Django Introspector & Isolated Sandbox Execution | 🟡 In Progress |
-| v0.3.0 | Dynamic Path Converter Engine & Mock Data Generator | 🔲 Planned |
-| v0.4.0 | Model Context Protocol (MCP) Server & Agentic Loop | 🔲 Planned |
-| v1.0.0 | Terminal CLI Linter & Interactive Dashboard (optional) | 🔲 Future |
-
-Full detail, file-by-file, lives in [`ROADMAP.md`](./ROADMAP.md). The reasoning behind each architectural decision — including why certain things were deliberately left out of earlier versions — lives in [`CHANGELOG.md`](./CHANGELOG.md).
+Full detail, file-by-file, lives in [`ROADMAP.md`](./ROADMAP.md). The reasoning behind each architectural decision, including why certain things were deliberately left out of earlier versions — lives in [`CHANGELOG.md`](./CHANGELOG.md).
 
 ---
 
