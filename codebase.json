@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "project_name": "da-profiler",
+  "package_name": "dqs",
+  "version": "0.1.0",
+  "description": "Isolated query profiling, AST N+1 bottleneck detection, and mock-data sandbox engine for Django & DRF.",
+  "single_source_of_truth_rules": [
+    "Core logic in `dqs/core/` MUST be pure Python and framework-agnostic. No Django/DRF imports allowed in `dqs/core/`.",
+    "DB profiling MUST run inside `transaction.atomic()` savepoints with mandatory rollback to preserve DB integrity.",
+    "Static AST code scanning must inspect user code without importing or executing target modules.",
+    "When modifying functions or class signatures, agents MUST check and update all call sites across `dqs/` and `tests/`."
+  ],
+  "architecture_layers": {
+    "core": {
+      "path": "dqs/core/",
+      "purpose": "Framework-agnostic analysis engine (Zero framework dependencies)",
+      "files": {
+        "dqs/core/analyzer.py": {
+          "exports": ["fingerprint(raw_sql: str) -> str", "detect_n_plus_one(queries, threshold=2) -> List[Dict]", "suggest_fix(fp, relationships=None, src_loc=None) -> str"],
+          "key_logic": "Uses `sqlglot` to parse SQL AST, strips literals, canonicalizes table aliases to T0/T1, collapses IN lists, groups queries by fingerprint+location, flags N+1, and suggests `.select_related()` / `.prefetch_related()`."
+        },
+        "dqs/core/static_advisor.py": {
+          "exports": ["StaticASTAdvisor", "scan_file(filepath: str) -> List[Dict]"],
+          "key_logic": "Parses Python AST with standard library `ast`. Detects ORM queries inside `For`/`While` loops and blocking synchronous callables (`requests.get`, `smtplib`, `time.sleep`)."
+        },
+        "dqs/core/targets.py": {
+          "exports": ["Target", "TargetKind"],
+          "key_logic": "Dataclass representing triggerable profiling items (`id`, `kind`, `triggerable`, `trigger_spec`, `static_findings`)."
+        }
+      }
+    },
+    "adapters_drf": {
+      "path": "dqs/adapters/drf/",
+      "purpose": "Django & Django REST Framework integration layer",
+      "files": {
+        "dqs/adapters/drf/discovery.py": {
+          "exports": ["TargetDiscovery", "discover_all_targets() -> List[Target]"],
+          "key_logic": "Aggregates HTTP view routes, post_save/pre_save signals, and Celery tasks into unified `Target` objects."
+        },
+        "dqs/adapters/drf/introspector.py": {
+          "exports": ["DjangoIntrospector", "walk_urlpatterns()"],
+          "key_logic": "Recursively traverses `urlpatterns`, extracts view classes/functions, maps HTTP methods, and inspects parameters."
+        },
+        "dqs/adapters/drf/query_interceptor.py": {
+          "exports": ["QueryInterceptor"],
+          "key_logic": "Context manager wrapping `connection.execute_wrapper()`. Captures SQL, duration, and walks `inspect.stack()` to map queries to exact app file line numbers."
+        },
+        "dqs/adapters/drf/runner.py": {
+          "exports": ["SandboxRunner", "execute_isolated()", "profile_callable()"],
+          "key_logic": "Triggers targets via DRF `APIRequestFactory` inside `transaction.atomic()` savepoints and issues automatic savepoint rollbacks."
+        },
+        "dqs/adapters/drf/schema_advisor.py": {
+          "exports": ["SchemaAdvisor"],
+          "key_logic": "Analyzes captured SQL filter clauses to recommend DB indexes for high-frequency unindexed columns."
+        },
+        "dqs/adapters/drf/converters.py": {
+          "exports": ["DRFConverter"],
+          "key_logic": "Converts DRF serializer schemas and view parameters into mock payload generators."
+        }
+      }
+    }
+  },
+  "test_execution": {
+    "framework": "pytest",
+    "commands": {
+      "unit_core": "pytest -m core (Fast framework-agnostic AST logic tests)",
+      "integration_django": "pytest -m django (Django DB savepoint and runner tests)",
+      "full_suite": "pytest"
+    }
+  }
+}

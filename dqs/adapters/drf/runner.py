@@ -65,6 +65,7 @@ ELI5 PSEUDO-FORMAT FLOW MAP (How DjangoSandboxRunner works step-by-step):
 """
 import inspect
 import json
+import re
 import time
 import traceback
 from dataclasses import dataclass, field
@@ -82,6 +83,7 @@ from rest_framework.test import APIRequestFactory
 
 from dqs.core.analyzer import fingerprint, detect_n_plus_one, suggest_fix
 from dqs.adapters.drf.query_interceptor import QueryInterceptor
+from dqs.adapters.drf.converters import PathConverterResolver
 from django.db.models.signals import post_save, pre_save, post_delete, pre_delete
 from dqs.core.targets import Target
 from dqs.core.static_advisor import StaticASTAdvisor 
@@ -170,6 +172,32 @@ class DjangoSandboxRunner:
             resolved_path = reverse(url_name_or_path, kwargs=path_params)
         except Exception:
             resolved_path = url_name_or_path
+
+        # If reverse failed and target_model is provided, attempt automatic parameter resolution
+        if (
+            (resolved_path == url_name_or_path or "<" in resolved_path or "{" in resolved_path)
+            and target_model
+        ):
+            try:
+                app_label, model_name = target_model.split(".")
+                model_class = apps.get_model(app_label, model_name)
+                instance = model_class.objects.first()
+                if instance is None:
+                    instance = baker.make(model_class)
+                
+                auto_params = dict(path_params)
+                if "pk" not in auto_params and "id" not in auto_params:
+                    auto_params["pk"] = instance.pk
+
+                try:
+                    resolved_path = reverse(url_name_or_path, kwargs=auto_params)
+                except Exception:
+                    # Direct string replacement fallback
+                    resolved_path = url_name_or_path
+                    for k, v in auto_params.items():
+                        resolved_path = re.sub(rf"<{k}>|<[^:]+:{k}>|{{{k}}}", str(v), resolved_path)
+            except Exception:
+                pass
 
         try:
             resolved_match = resolve(resolved_path)
