@@ -102,7 +102,7 @@ class StaticASTAdvisor(ast.NodeVisitor):
         if method_name in ("filter", "exclude", "order_by"):
             for kw in node.keywords:
                 if kw.arg:
-                    self.queried_fields.append(kw.arg.split("__")[0])
+                    self.queried_fields.append(kw.arg)
             for arg in node.args:
                 if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
                     self.queried_fields.append(arg.value)

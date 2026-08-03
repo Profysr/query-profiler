@@ -4,7 +4,7 @@ ELI5 FLOW MAP (How DjangoIntrospector works step-by-step):
 =============================================================================
 1. list_all_routes() 
    └── Calls -> _extract_patterns() [Crawls all website URLs like a tree]
-        └── Calls -> _analyze_view() [Inspects if a URL points to a DRF API View]
+       └── Calls -> _analyze_view() [Inspects if a URL points to a DRF API View]
              ├── Calls -> _extract_model_from_class() [Finds which database table it uses]
              └── Calls -> _extract_path_params() [Finds variables in the URL like id/pk]
 =============================================================================
@@ -47,7 +47,8 @@ Output Structure
 import inspect
 import re
 from dataclasses import dataclass, field
-from typing import Any, List, Optional, Type
+from typing import Any, List, Optional, Type, Callable
+
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
@@ -74,6 +75,7 @@ class RouteMetadata:
     path_params: List[PathParam] = field(default_factory=list)
     target_model: Optional[str] = None
     reason_unexecutable: Optional[str] = None
+    view_callable: Optional[Callable] = None
 
     @property
     def has_path_params(self) -> bool:
@@ -177,6 +179,10 @@ class DjangoIntrospector:
             or getattr(unwrapped_callback, "view_class", None)
             or getattr(unwrapped_callback, "cls", None)
         )
+        
+        # Extract the original callable for AST static analysis. 
+        # Prefer the underlying view class for DRF, fallback to the raw callback.
+        original_callable = view_class if view_class else pattern.callback
 
         if view_class is None:
             return None
@@ -215,6 +221,7 @@ class DjangoIntrospector:
             path_params=path_params,
             target_model=target_model,
             reason_unexecutable=reason,
+            view_callable=original_callable,
         )
 
     def _extract_model_from_class(self, view_class: Type) -> Optional[str]:

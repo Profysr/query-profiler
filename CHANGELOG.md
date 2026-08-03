@@ -133,3 +133,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Known limitation (documented, not fixed)
 
 - Import-alias resolution in `static_advisor.py` is single-pass and order-dependent — an import appearing *after* its use in source order won't be resolved. Not expected to matter for standard top-of-file imports.
+
+## [0.25.1] - 2026-07-03
+
+### Fixed
+
+- **Seed data no longer pollutes query capture (`runner.py`)**: `profile_callable()` now accepts an optional `setup` callable that runs inside the same transaction/savepoint but *before* `QueryInterceptor` attaches. `execute_isolated()`'s mock-data seeding moved into this `setup` step, so seed `INSERT` queries can no longer be captured, inflate query counts, or trigger false N+1 flags on the profiled endpoint's own queries. This was a silent correctness bug affecting every `execute_isolated()` call that used `seed_count > 0`.
+
+- **Blocking-call detection now resolves import aliases (`static_advisor.py`)**: `StaticASTAdvisor` now tracks `import X as Y` and `from X import Y` statements via new `visit_Import()`/`visit_ImportFrom()` handlers, and resolves call names through this map before matching against `BLOCKING_CALL_PREFIXES`. Previously, aliased or `from`-imports (`import requests as r; r.post(...)`, `from smtplib import SMTP; SMTP(...)`) silently bypassed detection entirely — this was an explicitly named requirement in the v0.25.0 roadmap that wasn't met in the initial implementation.
+
+### Verified (no changes needed)
+
+- **AST Normalization logic (`analyzer.py`)**: Confirmed that the core AST normalizer logic required zero modifications to support the new interceptor mechanism. SQL fingerprints and N+1 aggregations generate exactly as they did under the old boundary limits.
