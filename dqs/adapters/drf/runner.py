@@ -191,7 +191,18 @@ class DjangoSandboxRunner:
             request.user = user if user is not None else AnonymousUser()
             request.resolver_match = resolved_match
 
-            response = resolved_match.func(request, *resolved_match.args, **resolved_match.kwargs)
+            view_class = route_meta.view_class
+            if view_class is None:
+                raise RuntimeError("No view class found for route")
+            if inspect.isclass(view_class):
+                # Handle Class-Based Views
+                # Call as_view to get a callable view function
+                view_func = view_class.as_view()
+                response = view_func(request, *resolved_match.args, **resolved_match.kwargs)
+            else:
+                # Handle Function-Based Views
+                response = view_class(request, *resolved_match.args, **resolved_match.kwargs)
+                
             status_code = getattr(response, "status_code", 500)
             return {"status_code": status_code, "exists": status_code < 400, "error": None}
         except Exception as e:
@@ -345,46 +356,16 @@ class DjangoSandboxRunner:
 
         total_duration = (time.perf_counter() - start_time) * 1000.0
 
-        formatted_queries = []
-        for q in queries_captured:
-            sql_text = q["sql"]
-            formatted_queries.append({
-                "sql": sql_text,
-                # NOTE: detect_n_plus_one() re-fingerprints internally from "sql" and never reads this key, kept here for the ExecutionResult payload returned to callers (e.g. the MCP layer, UI), not for the analyzer.
-                "fingerprint": fingerprint(sql_text),
-                "time_ms": q["time_ms"],
-                "source_location": q.get("source_location"),
-            })
-
-        n_plus_one_groups = detect_n_plus_one(formatted_queries, threshold=3, relationships=relationships)
-        analysis_payload = []
-        for group in n_plus_one_groups:
-            fp = group["fingerprint"]
-            analysis_payload.append({
-                "fingerprint": fp,
-                "count": group["count"],
-                "src_loc": group.get("src_loc"),
-                "suggestion": group.get("suggestion"),
-                "sample_queries": group.get("sample_queries", []),
-            })
-
-        metrics = {
-            "total_time_ms": round(total_duration, 2),
-            "db_time_ms": round(db_duration, 2),
-            "total_queries": len(queries_captured),
-            "unique_fingerprints": len(set(q["fingerprint"] for q in formatted_queries)),
-            "n_plus_one_detected": len(n_plus_one_groups) > 0,
-        }
-
-        return ExecutionResult(
+        return self._build_execution_result(
             route=resolved_path,
             status_code=status_code,
-            metrics=metrics,
-            queries=formatted_queries,
-            analysis=analysis_payload,
+            queries_captured=queries_captured,
+            db_duration=db_duration,
+            total_duration=total_duration,
             response_body=response_body,
-            seeded_records=seeded_records_info,
+            seeded_records_info=seeded_records_info,
             side_effect_warnings=side_effect_warnings,
+            relationships=relationships,
         )
 
     # Maps a signal's string name (as stored in Target.trigger_spec) back to the actual Django Signal object needed to know which model event to fire.

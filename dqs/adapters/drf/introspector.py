@@ -147,12 +147,13 @@ class DjangoIntrospector:
             or getattr(unwrapped_callback, "cls", None)
         )
         
+        if view_class is None:
+            return None
+            
         # Extract the original callable for AST static analysis. 
         # Prefer the underlying view class for DRF, fallback to the raw callback.
         original_callable = view_class if view_class else pattern.callback
 
-        if view_class is None:
-            return None
 
         # Gate: Ignore non-DRF views (plain Django views)
         is_drf = any("rest_framework" in f"{base.__module__}.{base.__name__}" for base in inspect.getmro(view_class))
