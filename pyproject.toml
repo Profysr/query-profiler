@@ -51,15 +51,24 @@ include = ["dqs*"]
 [tool.setuptools.package-data]
 "dqs.adapters.drf" = ["templates/dqs/*.html"]
 
-# Automatically configures pytest to use the demo project settings
+# Automatically configures pytest for the Django/DRF demo project
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "config.settings"
-pythonpath = [".", "demos/drf"]
+pythonpath = [".","demos/drf"]
 testpaths = ["tests"]
 
-# Register custom markers to categorize our test suite
-markers = [
-    "core: Pure framework-agnostic AST & logic tests (no DB/framework overhead)",
-    "django: Tests requiring Django settings and DB initialization",
-    "sqlalchemy: Tests requiring SQLAlchemy engine setup",
-]
+# Disable the default Django test runner (we use pytest-django exclusively)
+addopts = "-p no:cacheprovider"
+
+# Register markers by framework so CI can run only the relevant suite.
+# Usage:
+#   pytest -m core        → pure Python tests only (fastest, no DB)
+#   pytest -m django      → Django + DRF adapter tests (requires DB)
+#   pytest -m drf         → DRF-specific adapter tests subset
+#   pytest -m sqlalchemy  → SQLAlchemy adapter tests (future)
+#   pytest                → run everything
+[tool.pytest.ini_options.markers]
+core = "Pure Python tests — no DB, no framework overhead (dqs/core/)"
+django = "Tests requiring Django settings and DB access (dqs/adapters/drf/)"
+drf = "Tests for the Django REST Framework adapter specifically"
+sqlalchemy = "Tests for a future SQLAlchemy adapter"
