@@ -77,54 +77,46 @@ class DjangoTargetDiscovery:
                 static_findings=static_findings,
             ))
 
-        # 2. Discover Django Model Signals
-        signal_mappings = [
-            ("post_save", post_save),
-            ("pre_save", pre_save),
-            ("post_delete", post_delete),
-            ("pre_delete", pre_delete),
-        ]
+        # 2. Discover Django Model Signals (NOTE: Not implemented yet. Will add signal handling in the future.)
+        # signal_mappings = [
+        #     ("post_save", post_save),
+        #     ("pre_save", pre_save),
+        #     ("post_delete", post_delete),
+        #     ("pre_delete", pre_delete),
+        # ]
 
-        for sig_name, signal_obj in signal_mappings:
-            try:
-                for lookup_key, receiver_ref in signal_obj.receivers:
+        # for sig_name, signal_obj in signal_mappings:
+        #     try:
+        #         # _live_receivers(sender) yields active (receiver_key, receiver_func) pairs
+        #         for receiver_key, func_obj in signal_obj._live_receivers(None):
+        #             if not callable(func_obj):
+        #                 continue
+
+        #             func_name = getattr(func_obj, "__name__", "anonymous_receiver")
                     
-                    # 1. Unwrap the actual function from memory
-                    if isinstance(receiver_ref, weakref.ReferenceType):
-                        func_obj = receiver_ref()  
-                    else:
-                        func_obj = receiver_ref    
-                        
-                    # 2. Skip if the function was deleted from memory or is invalid
-                    if not callable(func_obj):
-                        continue
+        #             # receiver_key is typically a tuple like (sender_class_or_none, dispatch_uid)
+        #             sender_id = receiver_key[0] if isinstance(receiver_key, tuple) and len(receiver_key) > 0 else None
+        #             sender_model = self._resolve_sender_model(sender_id)
 
-                    # 3. Safely get the name of the function
-                    func_name = getattr(func_obj, "__name__", "anonymous_receiver")
+        #             is_triggerable = sender_model is not None
+        #             target_id = f"signal:{sig_name}:{func_name}"
 
-                    # 4. Resolve which model actually triggers this signal —
-                    #    without this, there's no way to synthesize a trigger event.
-                    sender_id = lookup_key[1] if isinstance(lookup_key, tuple) and len(lookup_key) > 1 else None
-                    sender_model = self._resolve_sender_model(sender_id)
+        #             if any(t.id == target_id for t in targets):
+        #                 continue
 
-                    # Wildcard receivers (sender=None, fire on ANY model) can't be
-                    # safely auto-triggered — we'd have to guess which model to
-                    # save/delete. Mark them discovered but not triggerable.
-                    is_triggerable = sender_model is not None
-
-                    targets.append(Target(
-                        id=f"signal:{sig_name}:{func_name}",
-                        kind="signal",
-                        triggerable=is_triggerable,
-                        trigger_spec={
-                            "signal": sig_name,
-                            "receiver": func_name,
-                            "sender_model": sender_model,
-                        },
-                        static_findings=self._analyze_callable_statically(func_obj),
-                    ))
-            except Exception as e:
-                logger.debug(f"Could not inspect signal {sig_name}: {e}")
+        #             targets.append(Target(
+        #                 id=target_id,
+        #                 kind="signal",
+        #                 triggerable=is_triggerable,
+        #                 trigger_spec={
+        #                     "signal": sig_name,
+        #                     "receiver": func_name,
+        #                     "sender_model": sender_model,
+        #                 },
+        #                 static_findings=self._analyze_callable_statically(func_obj),
+        #             ))
+        #     except Exception as e:
+        #         logger.debug(f"Could not inspect signal {sig_name}: {e}")
 
         # 3. Discover Celery Background Tasks
         try:
