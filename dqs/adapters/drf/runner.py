@@ -84,9 +84,10 @@ from rest_framework.test import APIRequestFactory
 from dqs.core.analyzer import fingerprint, detect_n_plus_one, suggest_fix
 from dqs.adapters.drf.query_interceptor import QueryInterceptor
 from dqs.adapters.drf.converters import PathConverterResolver
+from dqs.adapters.drf.introspector import RouteMetadata
 from django.db.models.signals import post_save, pre_save, post_delete, pre_delete
 from dqs.core.targets import Target
-from dqs.core.static_advisor import StaticASTAdvisor 
+from dqs.core.static_advisor import StaticASTAdvisor
 
 @dataclass
 class ExecutionResult:

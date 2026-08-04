@@ -47,7 +47,7 @@ Output Structure
 import inspect
 import re
 from dataclasses import dataclass, field
-from typing import Any, List, Optional, Type, Callable
+from typing import Any, Dict, List, Optional, Type, Callable
 
 from django.apps import apps
 from django.conf import settings
@@ -124,6 +124,8 @@ class DjangoIntrospector:
 
     def _extract_path_params(self, pattern: URLPattern) -> List[PathParam]:
         """Extracts URL parameters from modern Django RoutePattern converters."""
+        # Local import avoids circular dependency: converters.py imports PathParam/RouteMetadata from this module.
+        from dqs.adapters.drf.converters import PathConverterResolver
         return PathConverterResolver.extract_converters_from_pattern(pattern)
 
     def _analyze_view(self, pattern: URLPattern, full_path: str) -> Optional[RouteMetadata]:

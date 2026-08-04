@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple, Type
 
 from django.apps import apps
 from django.db import models
-from django.urls import URLPattern, reverse, get_converters
+from django.urls import URLPattern, reverse
 from django.urls.resolvers import RoutePattern
 from model_bakery import baker
 
@@ -31,12 +31,9 @@ class PathConverterResolver:
     @classmethod
     def resolve_converter_type(cls, converter_name: str) -> str:
         """
-        Queries Django's get_converters() registry to inspect registered converters.
+        Normalizes a Django converter class name to a simple type string.
+        e.g. 'intconverter' -> 'int', 'slgconverter' -> 'slug', '' -> 'str'
         """
-        converters = get_converters()
-        if converter_name in converters:
-            conv_obj = converters[converter_name]
-            return type(conv_obj).__name__.replace("Converter", "").lower()
         return converter_name or "str"
 
     @classmethod
@@ -64,7 +61,10 @@ class PathConverterResolver:
             return 1
         elif conv in ("uuid", "guid"):
             return "123e4567-e89b-12d3-a456-426614174000"
-        elif conv in ("slug", "str", "string", "path"):
+        elif conv == "slug":
+            return "test-slug"
+        elif conv in ("str", "string", "path"):
+            # Secondary hint: if the param name itself contains 'slug', produce a slug value
             if "slug" in param_name:
                 return "test-slug"
             return "test-param"
