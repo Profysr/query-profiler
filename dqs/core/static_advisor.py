@@ -67,6 +67,11 @@ class StaticASTAdvisor(ast.NodeVisitor):
         self.generic_visit(node)
         self._loop_depth -= 1
 
+    def visit_While(self, node: ast.While) -> None:
+        self._loop_depth += 1
+        self.generic_visit(node)
+        self._loop_depth -= 1
+
     def visit_Call(self, node: ast.Call) -> None:
         call_repr = self._get_call_name(node)
 
