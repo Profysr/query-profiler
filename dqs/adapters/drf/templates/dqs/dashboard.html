@@ -1,1542 +1,1037 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="csrf-token" content="{{ csrf_token }}">
-  <title>Da Profiler — Developer Dashboard</title>
-
-  <!--
-    Non-blocking Google Fonts load.
-    media="print" + onload trick ensures fonts load asynchronously without
-    blocking render. Falls back to the system font stack below if unavailable
-    (air-gapped Docker environments, network restrictions, etc.)
-  -->
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet"
-        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
-        media="print"
-        onload="this.media='all'">
-  <noscript>
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
-  </noscript>
-
-  <style>
-    /* ====================================================================
-       DESIGN TOKENS
-       ==================================================================== */
-    :root {
-      --bg-base:       #0d1117;
-      --bg-surface:    #161b22;
-      --bg-elevated:   #21262d;
-      --bg-hover:      #30363d;
-      --border:        #30363d;
-      --border-subtle: #21262d;
-
-      --text-primary:   #e6edf3;
-      --text-secondary: #8b949e;
-      --text-muted:     #484f58;
-
-      --blue:         #58a6ff;
-      --blue-dim:     rgba(88,166,255,0.12);
-      --green:        #3fb950;
-      --green-dim:    rgba(63,185,80,0.12);
-      --red:          #f85149;
-      --red-dim:      rgba(248,81,73,0.12);
-      --yellow:       #d29922;
-      --yellow-dim:   rgba(210,153,34,0.12);
-      --purple:       #bc8cff;
-      --orange:       #f0883e;
-
-      /*
-        System font stack — Inter is loaded above asynchronously.
-        If it doesn't arrive (offline/air-gapped), the stack degrades
-        gracefully through modern system UI fonts.
-      */
-      --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI',
-                   Roboto, Helvetica, Arial, sans-serif;
-      --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code',
-                   Consolas, 'Courier New', monospace;
-
-      --radius-sm: 4px;
-      --radius-md: 8px;
-      --radius-lg: 12px;
-      --sidebar-w: 360px;
-      --header-h:  56px;
-    }
-
-    /* ====================================================================
-       RESET & BASE
-       ==================================================================== */
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-    html { height: 100%; }
-
-    body {
-      font-family: var(--font-sans);
-      background: var(--bg-base);
-      color: var(--text-primary);
-      height: 100%;
-      display: flex;
-      flex-direction: column;
-      font-size: 14px;
-      line-height: 1.5;
-      -webkit-font-smoothing: antialiased;
-      -moz-osx-font-smoothing: grayscale;
-    }
-
-    /* ====================================================================
-       HEADER
-       ==================================================================== */
-    .app-header {
-      height: var(--header-h);
-      background: var(--bg-surface);
-      border-bottom: 1px solid var(--border);
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 0 20px;
-      flex-shrink: 0;
-      position: sticky;
-      top: 0;
-      z-index: 100;
-    }
-
-    .header-brand {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-
-    .header-logo-wrap {
-      width: 30px;
-      height: 30px;
-      flex-shrink: 0;
-    }
-
-    .header-title {
-      font-size: 15px;
-      font-weight: 600;
-      color: var(--text-primary);
-      letter-spacing: -0.01em;
-    }
-
-    .header-divider {
-      color: var(--border);
-      font-size: 18px;
-      font-weight: 300;
-    }
-
-    .header-subtitle {
-      font-size: 13px;
-      color: var(--text-secondary);
-    }
-
-    .header-meta {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-
-    .badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      padding: 4px 10px;
-      border-radius: 20px;
-      font-size: 12px;
-      font-weight: 500;
-      border: 1px solid;
-    }
-
-    .badge-routes {
-      background: var(--bg-elevated);
-      color: var(--text-secondary);
-      border-color: var(--border);
-    }
-
-    .badge-debug {
-      background: var(--green-dim);
-      color: var(--green);
-      border-color: rgba(63,185,80,0.3);
-    }
-
-    .dot {
-      width: 6px; height: 6px;
-      border-radius: 50%;
-      background: currentColor;
-      animation: pulse 2s infinite;
-    }
-
-    @keyframes pulse {
-      0%, 100% { opacity: 1; }
-      50%       { opacity: 0.4; }
-    }
-
-    /* ====================================================================
-       LAYOUT
-       ==================================================================== */
-    .app-body {
-      flex: 1;
-      display: grid;
-      grid-template-columns: var(--sidebar-w) 1fr;
-      overflow: hidden;
-      height: calc(100vh - var(--header-h));
-    }
-
-    /* ====================================================================
-       SIDEBAR
-       ==================================================================== */
-    .sidebar {
-      background: var(--bg-surface);
-      border-right: 1px solid var(--border);
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-    }
-
-    .sidebar-header {
-      padding: 14px 14px 10px;
-      border-bottom: 1px solid var(--border-subtle);
-      flex-shrink: 0;
-    }
-
-    .sidebar-title {
-      font-size: 11px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      color: var(--text-muted);
-      margin-bottom: 10px;
-    }
-
-    .search-box {
-      position: relative;
-      margin-bottom: 8px;
-    }
-
-    .search-icon {
-      position: absolute;
-      left: 9px;
-      top: 50%;
-      transform: translateY(-50%);
-      color: var(--text-muted);
-      pointer-events: none;
-      width: 13px;
-      height: 13px;
-    }
-
-    .search-input {
-      width: 100%;
-      background: var(--bg-elevated);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-md);
-      color: var(--text-primary);
-      font-family: var(--font-sans);
-      font-size: 13px;
-      padding: 7px 10px 7px 30px;
-      outline: none;
-      transition: border-color 0.15s;
-    }
-
-    .search-input:focus { border-color: var(--blue); }
-    .search-input::placeholder { color: var(--text-muted); }
-
-    .filter-row {
-      display: flex;
-      gap: 5px;
-      flex-wrap: wrap;
-    }
-
-    .filter-chip {
-      padding: 3px 9px;
-      border-radius: 12px;
-      font-size: 11px;
-      font-weight: 500;
-      cursor: pointer;
-      border: 1px solid var(--border);
-      background: transparent;
-      color: var(--text-muted);
-      transition: all 0.15s;
-      font-family: var(--font-sans);
-    }
-
-    .filter-chip:hover { border-color: var(--blue); color: var(--blue); }
-    .filter-chip.active { background: var(--blue-dim); border-color: var(--blue); color: var(--blue); }
-
-    .route-list {
-      flex: 1;
-      overflow-y: auto;
-      padding: 6px 8px;
-    }
-
-    .route-list::-webkit-scrollbar { width: 4px; }
-    .route-list::-webkit-scrollbar-track { background: transparent; }
-    .route-list::-webkit-scrollbar-thumb { background: var(--bg-hover); border-radius: 2px; }
-
-    .route-card {
-      padding: 9px 11px;
-      border-radius: var(--radius-md);
-      cursor: pointer;
-      border: 1px solid transparent;
-      margin-bottom: 3px;
-      transition: all 0.12s;
-    }
-
-    .route-card:hover { background: var(--bg-elevated); border-color: var(--border); }
-    .route-card.active { background: var(--blue-dim); border-color: var(--blue); }
-    .route-card.not-exec { opacity: 0.45; cursor: default; }
-    .route-card.not-exec:hover { background: transparent; border-color: transparent; }
-
-    .rc-path {
-      font-family: var(--font-mono);
-      font-size: 11.5px;
-      font-weight: 500;
-      color: var(--text-primary);
-      margin-bottom: 5px;
-      word-break: break-all;
-    }
-
-    .route-card.active .rc-path { color: var(--blue); }
-
-    .rc-meta {
-      display: flex;
-      align-items: center;
-      gap: 4px;
-      flex-wrap: wrap;
-    }
-
-    .m-badge {
-      padding: 1px 5px;
-      border-radius: 3px;
-      font-size: 10px;
-      font-weight: 700;
-      font-family: var(--font-mono);
-    }
-
-    .m-GET    { background: rgba(63,185,80,0.18);  color: #3fb950; }
-    .m-POST   { background: rgba(88,166,255,0.18); color: #58a6ff; }
-    .m-PUT    { background: rgba(210,153,34,0.18); color: #d29922; }
-    .m-PATCH  { background: rgba(188,140,255,0.18);color: #bc8cff; }
-    .m-DELETE { background: rgba(248,81,73,0.18);  color: #f85149; }
-    .m-HEAD, .m-OPTIONS { background: rgba(139,148,158,0.18); color: #8b949e; }
-
-    .rc-model { font-size: 10px; color: var(--text-muted); font-family: var(--font-mono); }
-    .rc-params { font-size: 10px; color: var(--orange); }
-
-    .no-routes-placeholder {
-      text-align: center;
-      padding: 32px 16px;
-      color: var(--text-muted);
-      font-size: 12px;
-    }
-
-    /* ====================================================================
-       MAIN PANEL
-       ==================================================================== */
-    .main-panel {
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-    }
-
-    /* ====================================================================
-       EMPTY STATE
-       ==================================================================== */
-    .empty-state {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 14px;
-      padding: 40px;
-      text-align: center;
-    }
-
-    .empty-state-icon {
-      width: 56px;
-      height: 56px;
-      opacity: 0.15;
-    }
-
-    .empty-state h3 { font-size: 17px; color: var(--text-secondary); font-weight: 500; }
-    .empty-state p  { font-size: 13px; color: var(--text-muted); max-width: 320px; line-height: 1.6; }
-
-    /* ====================================================================
-       PROFILER PANEL
-       ==================================================================== */
-    #profiler-panel {
-      display: flex;
-      flex-direction: column;
-      flex: 1;
-      overflow: hidden;
-    }
-
-    .profiler-header {
-      padding: 14px 20px;
-      border-bottom: 1px solid var(--border);
-      flex-shrink: 0;
-      background: var(--bg-surface);
-    }
-
-    .profiler-path {
-      font-family: var(--font-mono);
-      font-size: 15px;
-      font-weight: 600;
-      color: var(--text-primary);
-      margin-bottom: 7px;
-      letter-spacing: -0.01em;
-    }
-
-    .profiler-meta {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      flex-wrap: wrap;
-    }
-
-    .view-type-pill {
-      padding: 2px 8px;
-      background: var(--bg-elevated);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      font-size: 11px;
-      color: var(--text-secondary);
-    }
-
-    .exec-ok  { font-size: 12px; color: var(--green); }
-    .exec-no  { font-size: 12px; color: var(--red); }
-
-    /* ====================================================================
-       CONTROLS BAR
-       ==================================================================== */
-    .controls-bar {
-      display: flex;
-      align-items: flex-end;
-      gap: 14px;
-      padding: 12px 20px;
-      border-bottom: 1px solid var(--border);
-      flex-shrink: 0;
-      background: var(--bg-surface);
-      flex-wrap: wrap;
-    }
-
-    .ctrl-group { display: flex; flex-direction: column; gap: 4px; }
-
-    .ctrl-label {
-      font-size: 10px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.07em;
-      color: var(--text-muted);
-    }
-
-    .ctrl-label-warn { color: var(--orange); }
-
-    select, input[type="number"], input[type="text"] {
-      background: var(--bg-elevated);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-sm);
-      color: var(--text-primary);
-      font-family: var(--font-sans);
-      font-size: 13px;
-      padding: 6px 10px;
-      outline: none;
-      transition: border-color 0.15s;
-    }
-
-    select:focus, input:focus { border-color: var(--blue); }
-
-    .param-row { display: flex; gap: 8px; flex-wrap: wrap; }
-
-    .param-item { display: flex; flex-direction: column; gap: 4px; }
-
-    .param-label {
-      font-size: 10px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-      color: var(--orange);
-    }
-
-    .param-conv { color: var(--text-muted); font-weight: 400; text-transform: none; }
-
-    .param-input {
-      font-family: var(--font-mono) !important;
-      font-size: 12px !important;
-      width: 110px;
-    }
-
-    .ctrl-spacer { flex: 1; }
-
-    /* ====================================================================
-       BUTTONS
-       ==================================================================== */
-    .btn {
-      display: inline-flex;
-      align-items: center;
-      gap: 7px;
-      padding: 7px 16px;
-      border-radius: var(--radius-md);
-      font-family: var(--font-sans);
-      font-size: 13px;
-      font-weight: 500;
-      border: none;
-      cursor: pointer;
-      transition: all 0.15s;
-      white-space: nowrap;
-      line-height: 1;
-    }
-
-    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
-
-    .btn-primary { background: var(--blue); color: #000; }
-    .btn-primary:hover:not(:disabled) { background: #79b8ff; }
-
-    .btn-ghost {
-      background: transparent;
-      color: var(--text-secondary);
-      border: 1px solid var(--border);
-    }
-    .btn-ghost:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); }
-
-    .spinner {
-      display: none;
-      width: 13px; height: 13px;
-      border: 2px solid rgba(0,0,0,0.3);
-      border-top-color: #000;
-      border-radius: 50%;
-      animation: spin 0.65s linear infinite;
-    }
-
-    @keyframes spin { to { transform: rotate(360deg); } }
-
-    .btn.loading .spinner { display: block; }
-    .btn.loading .btn-icon { display: none; }
-
-    /* ====================================================================
-       RESULTS AREA
-       ==================================================================== */
-    .results-area {
-      flex: 1;
-      overflow-y: auto;
-      padding: 20px;
-    }
-
-    .results-area::-webkit-scrollbar { width: 5px; }
-    .results-area::-webkit-scrollbar-track { background: transparent; }
-    .results-area::-webkit-scrollbar-thumb { background: var(--bg-hover); border-radius: 3px; }
-
-    .results-placeholder {
-      text-align: center;
-      padding: 60px 20px;
-      color: var(--text-muted);
-      font-size: 13px;
-    }
-
-    @keyframes fadeUp {
-      from { opacity: 0; transform: translateY(8px); }
-      to   { opacity: 1; transform: translateY(0); }
-    }
-
-    .animate-in { animation: fadeUp 0.2s ease; }
-
-    /* ====================================================================
-       METRICS GRID
-       ==================================================================== */
-    .metrics-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
-      gap: 10px;
-      margin-bottom: 18px;
-    }
-
-    .metric-card {
-      background: var(--bg-surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-md);
-      padding: 13px 15px;
-      position: relative;
-      overflow: hidden;
-    }
-
-    .metric-card::before {
-      content: '';
-      position: absolute;
-      top: 0; left: 0; right: 0;
-      height: 2px;
-    }
-
-    .mc-ok::before     { background: var(--green); }
-    .mc-warn::before   { background: var(--yellow); }
-    .mc-danger::before { background: var(--red); }
-    .mc-info::before   { background: var(--blue); }
-
-    .metric-label {
-      font-size: 10px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.07em;
-      color: var(--text-muted);
-      margin-bottom: 5px;
-    }
-
-    .metric-value {
-      font-size: 24px;
-      font-weight: 700;
-      font-family: var(--font-mono);
-      color: var(--text-primary);
-      line-height: 1;
-      margin-bottom: 3px;
-    }
-
-    .metric-sub { font-size: 11px; color: var(--text-muted); }
-
-    /* Status code pill */
-    .sc-pill {
-      display: inline-block;
-      padding: 2px 9px;
-      border-radius: var(--radius-sm);
-      font-family: var(--font-mono);
-      font-size: 20px;
-      font-weight: 700;
-    }
-
-    .sc-2xx { background: var(--green-dim); color: var(--green); }
-    .sc-4xx { background: var(--yellow-dim); color: var(--yellow); }
-    .sc-5xx { background: var(--red-dim); color: var(--red); }
-
-    /* ====================================================================
-       ALERTS
-       ==================================================================== */
-    .alert {
-      display: flex;
-      align-items: flex-start;
-      gap: 10px;
-      padding: 11px 14px;
-      border-radius: var(--radius-md);
-      border: 1px solid;
-      font-size: 13px;
-      margin-bottom: 14px;
-      line-height: 1.5;
-    }
-
-    .alert-icon { flex-shrink: 0; margin-top: 1px; }
-    .alert-danger  { background: var(--red-dim);    border-color: rgba(248,81,73,0.3);  color: var(--red);    }
-    .alert-warning { background: var(--yellow-dim); border-color: rgba(210,153,34,0.3); color: var(--yellow); }
-    .alert-success { background: var(--green-dim);  border-color: rgba(63,185,80,0.3);  color: var(--green);  }
-    .alert-info    { background: var(--blue-dim);   border-color: rgba(88,166,255,0.3); color: var(--blue);   }
-
-    /* ====================================================================
-       TABS
-       ==================================================================== */
-    .tab-bar {
-      display: flex;
-      border-bottom: 1px solid var(--border);
-      margin-bottom: 14px;
-      gap: 0;
-    }
-
-    .tab-btn {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 8px 15px;
-      font-size: 13px;
-      font-weight: 500;
-      color: var(--text-secondary);
-      background: none;
-      border: none;
-      border-bottom: 2px solid transparent;
-      margin-bottom: -1px;
-      cursor: pointer;
-      transition: color 0.15s, border-color 0.15s;
-      font-family: var(--font-sans);
-      white-space: nowrap;
-    }
-
-    .tab-btn:hover { color: var(--text-primary); }
-    .tab-btn.active { color: var(--blue); border-bottom-color: var(--blue); }
-
-    .tab-count {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      min-width: 18px;
-      height: 18px;
-      padding: 0 5px;
-      border-radius: 9px;
-      font-size: 10px;
-      font-weight: 600;
-      background: var(--bg-elevated);
-      color: var(--text-secondary);
-    }
-
-    .tc-issues { background: var(--red-dim); color: var(--red); }
-
-    .tab-panel { display: none; }
-    .tab-panel.active { display: block; }
-
-    .tab-empty {
-      text-align: center;
-      padding: 44px 20px;
-      color: var(--text-muted);
-    }
-
-    .te-icon { font-size: 30px; margin-bottom: 10px; }
-    .tab-empty h4 { font-size: 14px; color: var(--text-secondary); margin-bottom: 6px; }
-    .tab-empty p  { font-size: 12px; }
-
-    /* ====================================================================
-       N+1 CARDS
-       ==================================================================== */
-    .n1-card {
-      background: var(--bg-surface);
-      border: 1px solid rgba(248,81,73,0.3);
-      border-radius: var(--radius-lg);
-      margin-bottom: 12px;
-      overflow: hidden;
-    }
-
-    .n1-card-head {
-      display: flex;
-      align-items: flex-start;
-      gap: 12px;
-      padding: 13px 15px 11px;
-      background: rgba(248,81,73,0.05);
-      border-bottom: 1px solid rgba(248,81,73,0.12);
-    }
-
-    .n1-count {
-      flex-shrink: 0;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      min-width: 34px;
-      height: 22px;
-      padding: 0 8px;
-      border-radius: 11px;
-      font-size: 11px;
-      font-weight: 700;
-      background: var(--red-dim);
-      color: var(--red);
-      border: 1px solid rgba(248,81,73,0.3);
-      font-family: var(--font-mono);
-    }
-
-    .n1-fp {
-      font-family: var(--font-mono);
-      font-size: 11.5px;
-      color: var(--text-secondary);
-      word-break: break-all;
-      flex: 1;
-      line-height: 1.5;
-    }
-
-    .n1-card-body { padding: 13px 15px; }
-
-    .n1-src {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      font-size: 12px;
-      color: var(--blue);
-      font-family: var(--font-mono);
-      margin-bottom: 12px;
-    }
-
-    .n1-fix-box {
-      background: var(--bg-elevated);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-md);
-      padding: 12px 13px;
-    }
-
-    .n1-fix-label {
-      font-size: 10px;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.07em;
-      color: var(--green);
-      margin-bottom: 7px;
-    }
-
-    .n1-fix-text { font-size: 13px; color: var(--text-primary); line-height: 1.5; }
-
-    .copy-btn {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      padding: 4px 10px;
-      margin-top: 9px;
-      border-radius: var(--radius-sm);
-      font-size: 11px;
-      font-weight: 500;
-      background: var(--bg-hover);
-      border: 1px solid var(--border);
-      color: var(--text-secondary);
-      cursor: pointer;
-      transition: all 0.15s;
-      font-family: var(--font-sans);
-    }
-
-    .copy-btn:hover { color: var(--text-primary); border-color: var(--blue); }
-    .copy-btn.copied { color: var(--green); border-color: var(--green); }
-
-    details > summary {
-      font-size: 11px;
-      color: var(--text-muted);
-      cursor: pointer;
-      user-select: none;
-      margin-top: 10px;
-    }
-
-    details > summary:hover { color: var(--text-secondary); }
-
-    .sample-sql {
-      display: block;
-      margin-top: 6px;
-      font-size: 11px;
-      font-family: var(--font-mono);
-      background: var(--bg-elevated);
-      padding: 6px 10px;
-      border-radius: var(--radius-sm);
-      color: var(--text-secondary);
-      word-break: break-all;
-      line-height: 1.5;
-    }
-
-    /* ====================================================================
-       QUERY TABLE
-       ==================================================================== */
-    .table-wrap {
-      border: 1px solid var(--border);
-      border-radius: var(--radius-md);
-      overflow: hidden;
-    }
-
-    .q-table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 12px;
-    }
-
-    .q-table th {
-      padding: 9px 12px;
-      text-align: left;
-      background: var(--bg-surface);
-      color: var(--text-muted);
-      font-size: 10px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.07em;
-      border-bottom: 1px solid var(--border);
-      white-space: nowrap;
-    }
-
-    .q-table td {
-      padding: 9px 12px;
-      border-bottom: 1px solid var(--border-subtle);
-      vertical-align: top;
-    }
-
-    .q-table tr:last-child td { border-bottom: none; }
-    .q-table tbody tr:hover td { background: var(--bg-elevated); }
-
-    .sql-code {
-      font-family: var(--font-mono);
-      font-size: 11px;
-      color: var(--text-secondary);
-      word-break: break-all;
-      line-height: 1.5;
-      max-width: 380px;
-    }
-
-    .src-loc {
-      font-family: var(--font-mono);
-      font-size: 11px;
-      color: var(--blue);
-      white-space: nowrap;
-    }
-
-    .t-ms { font-family: var(--font-mono); font-size: 11px; white-space: nowrap; }
-    .t-ms.slow      { color: var(--yellow); }
-    .t-ms.very-slow { color: var(--red); }
-
-    .seq { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); }
-
-    /* ====================================================================
-       SIDE EFFECT ITEMS
-       ==================================================================== */
-    .se-item {
-      display: flex;
-      align-items: flex-start;
-      gap: 10px;
-      padding: 10px 13px;
-      background: var(--yellow-dim);
-      border: 1px solid rgba(210,153,34,0.3);
-      border-radius: var(--radius-md);
-      margin-bottom: 8px;
-      font-size: 13px;
-      color: var(--yellow);
-      line-height: 1.5;
-    }
-
-    /* ====================================================================
-       JSON VIEWER
-       ==================================================================== */
-    .json-view {
-      background: var(--bg-surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-md);
-      padding: 14px 16px;
-      font-family: var(--font-mono);
-      font-size: 12px;
-      color: var(--text-secondary);
-      white-space: pre-wrap;
-      word-break: break-word;
-      max-height: 520px;
-      overflow-y: auto;
-      line-height: 1.6;
-    }
-
-    .json-view::-webkit-scrollbar { width: 4px; }
-    .json-view::-webkit-scrollbar-thumb { background: var(--bg-hover); border-radius: 2px; }
-
-    .jk { color: #79c0ff; }   /* key */
-    .js { color: #a5d6ff; }   /* string value */
-    .jn { color: #f2cc60; }   /* number */
-    .jb { color: var(--purple); }  /* bool */
-    .jz { color: var(--text-muted); }  /* null */
-
-    /* ====================================================================
-       RESPONSIVE GUARD
-       ==================================================================== */
-    @media (max-width: 820px) {
-      .app-body {
-        grid-template-columns: 1fr;
-        grid-template-rows: 220px 1fr;
-      }
-
-      .sidebar {
-        border-right: none;
-        border-bottom: 1px solid var(--border);
-      }
-    }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="{{ csrf_token }}">
+    <title>Da Profiler | Django Query Sandbox</title>
+    <style>
+        :root {
+            --bg-base: #0f1117;
+            --bg-surface: #161b22;
+            --bg-hover: #21262d;
+            --border: #30363d;
+            --text-main: #e6edf3;
+            --text-muted: #8b949e;
+            --primary: #2f81f7;
+            --primary-hover: #1f6feb;
+            --green: #238636;
+            --red: #f85149;
+            --orange: #d29922;
+            --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+            --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+            
+            /* Status Colors */
+            --sc-2xx: #2ea043;
+            --sc-3xx: #d29922;
+            --sc-4xx: #f85149;
+            --sc-5xx: #ff7b72;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        
+        body {
+            font-family: var(--font-sans);
+            background-color: var(--bg-base);
+            color: var(--text-main);
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* =========================================================================
+           LAYOUT: SIDEBAR
+           ========================================================================= */
+        .sidebar {
+            width: 320px;
+            background-color: var(--bg-surface);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+        }
+
+        .sidebar-header {
+            padding: 16px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .sidebar-header h2 {
+            font-size: 16px;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .search-box {
+            width: 100%;
+            padding: 8px 12px;
+            background: var(--bg-base);
+            border: 1px solid var(--border);
+            color: var(--text-main);
+            border-radius: 6px;
+            margin-bottom: 12px;
+            font-size: 14px;
+            outline: none;
+        }
+        .search-box:focus { border-color: var(--primary); }
+
+        .filters {
+            display: flex;
+            gap: 6px;
+        }
+
+        .filter-chip {
+            background: var(--bg-base);
+            border: 1px solid var(--border);
+            color: var(--text-muted);
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .filter-chip:hover { color: var(--text-main); }
+        .filter-chip.active {
+            background: var(--primary);
+            color: white;
+            border-color: var(--primary);
+        }
+
+        .route-list-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 8px;
+        }
+
+        .route-card {
+            padding: 10px;
+            border-radius: 6px;
+            cursor: pointer;
+            margin-bottom: 4px;
+            border: 1px solid transparent;
+        }
+        .route-card:hover { background-color: var(--bg-hover); }
+        .route-card.active {
+            background-color: var(--bg-hover);
+            border-color: var(--border);
+        }
+        .route-card.not-exec { opacity: 0.5; }
+
+        .rc-path {
+            font-family: var(--font-mono);
+            font-size: 12px;
+            margin-bottom: 6px;
+            word-break: break-all;
+        }
+        
+        .rc-meta {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+            font-size: 11px;
+            flex-wrap: wrap;
+        }
+
+        /* =========================================================================
+           METHOD BADGES & TAGS
+           ========================================================================= */
+        .m-badge {
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 600;
+            font-family: var(--font-mono);
+        }
+        .m-GET { background: #1f6feb22; color: #58a6ff; }
+        .m-POST { background: #2ea04322; color: #3fb950; }
+        .m-PUT, .m-PATCH { background: #d2992222; color: #d29922; }
+        .m-DELETE { background: #f8514922; color: #f85149; }
+
+        .rc-params, .rc-model, .view-type-pill {
+            color: var(--text-muted);
+            background: var(--bg-base);
+            padding: 2px 6px;
+            border-radius: 4px;
+            border: 1px solid var(--border);
+        }
+
+        .exec-ok { color: var(--green); font-size: 11px; }
+        .exec-no { color: var(--red); font-size: 11px; }
+
+        /* =========================================================================
+           LAYOUT: MAIN CONTENT
+           ========================================================================= */
+        .main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background-color: var(--bg-base);
+        }
+
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: var(--text-muted);
+        }
+
+        .profiler-panel {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+        }
+
+        /* Top Bar */
+        .prof-header {
+            padding: 20px;
+            background-color: var(--bg-surface);
+            border-bottom: 1px solid var(--border);
+        }
+        #prof-path {
+            font-family: var(--font-mono);
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 12px;
+        }
+        #prof-meta {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+
+        /* Controls */
+        .controls-bar {
+            padding: 16px 20px;
+            display: flex;
+            gap: 16px;
+            align-items: flex-end;
+            border-bottom: 1px solid var(--border);
+            background-color: var(--bg-base);
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .control-group label {
+            font-size: 12px;
+            color: var(--text-muted);
+            font-weight: 600;
+        }
+        .control-group select, .control-group input {
+            background: var(--bg-surface);
+            border: 1px solid var(--border);
+            color: var(--text-main);
+            padding: 6px 10px;
+            border-radius: 4px;
+            font-size: 13px;
+            outline: none;
+            font-family: var(--font-mono);
+        }
+        .control-group select:focus, .control-group input:focus { border-color: var(--primary); }
+        
+        .run-btn {
+            background: var(--green);
+            color: white;
+            border: none;
+            padding: 8px 20px;
+            border-radius: 6px;
+            font-weight: 600;
+            cursor: pointer;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: background 0.2s;
+        }
+        .run-btn:hover { background: #2ea043; }
+        .run-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        
+        /* Spinner */
+        .run-btn.loading::after {
+            content: '';
+            width: 14px;
+            height: 14px;
+            border: 2px solid white;
+            border-bottom-color: transparent;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Path Params */
+        #params-inputs {
+            display: flex;
+            gap: 12px;
+        }
+
+        /* Results Area */
+        .results-area {
+            flex: 1;
+            overflow-y: auto;
+            padding: 24px;
+            background-color: var(--bg-base);
+        }
+
+        /* Metrics Grid */
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        .metric-card {
+            background: var(--bg-surface);
+            border: 1px solid var(--border);
+            padding: 16px;
+            border-radius: 8px;
+            border-top: 3px solid;
+        }
+        .mc-ok { border-top-color: var(--green); }
+        .mc-warn { border-top-color: var(--orange); }
+        .mc-danger { border-top-color: var(--red); }
+        
+        .metric-label { font-size: 12px; color: var(--text-muted); margin-bottom: 8px; }
+        .metric-value { font-size: 24px; font-weight: 600; font-family: var(--font-mono); display: flex; align-items: center; gap: 8px;}
+        .metric-sub { font-size: 12px; color: var(--text-muted); margin-top: 8px; }
+
+        .sc-pill {
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 14px;
+        }
+        .sc-2xx { background: #2ea04322; color: var(--sc-2xx); }
+        .sc-3xx { background: #d2992222; color: var(--sc-3xx); }
+        .sc-4xx { background: #f8514922; color: var(--sc-4xx); }
+        .sc-5xx { background: #ff7b7222; color: var(--sc-5xx); }
+
+        /* Alerts */
+        .alert {
+            padding: 12px 16px;
+            border-radius: 6px;
+            margin-bottom: 24px;
+            font-size: 14px;
+            border-left: 4px solid;
+        }
+        .alert-success { background: #2ea04311; border-color: var(--green); }
+        .alert-danger { background: #f8514911; border-color: var(--red); }
+        .alert-warning { background: #d2992211; border-color: var(--orange); }
+
+        /* Tabs */
+        .tab-bar {
+            display: flex;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 20px;
+        }
+        .tab-btn {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            padding: 12px 20px;
+            font-size: 14px;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            font-weight: 500;
+        }
+        .tab-btn:hover { color: var(--text-main); }
+        .tab-btn.active {
+            color: var(--text-main);
+            border-bottom-color: var(--primary);
+        }
+        .tab-count {
+            background: var(--border);
+            padding: 2px 6px;
+            border-radius: 10px;
+            font-size: 11px;
+            margin-left: 6px;
+        }
+        .tc-issues { background: var(--red); color: white; }
+
+        .tab-panel { display: none; }
+        .tab-panel.active { display: block; animation: fadeIn 0.3s; }
+        
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+        /* N+1 Cards */
+        .n1-card {
+            background: var(--bg-surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            margin-bottom: 16px;
+            overflow: hidden;
+        }
+        .n1-card-head {
+            background: #f8514911;
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .n1-fp { font-family: var(--font-mono); font-size: 13px; color: var(--red); }
+        .n1-count { font-weight: bold; background: var(--red); color: white; padding: 2px 8px; border-radius: 12px; font-size: 12px;}
+        
+        .n1-card-body { padding: 16px; }
+        .n1-src { font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); margin-bottom: 12px; }
+        
+        .n1-fix-box {
+            background: #2ea04311;
+            border: 1px solid #2ea04333;
+            padding: 12px;
+            border-radius: 6px;
+            position: relative;
+        }
+        .n1-fix-label { font-size: 12px; color: var(--green); font-weight: bold; margin-bottom: 8px; }
+        .n1-fix-text { font-family: var(--font-mono); font-size: 13px; line-height: 1.5; }
+        
+        .copy-btn {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            background: var(--bg-surface);
+            border: 1px solid var(--border);
+            color: var(--text-main);
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            cursor: pointer;
+        }
+        .copy-btn:hover { border-color: var(--primary); }
+        .copy-btn.copied { background: var(--green); color: white; border-color: var(--green); }
+
+        details { margin-top: 16px; }
+        summary { cursor: pointer; font-size: 13px; color: var(--primary); margin-bottom: 8px; }
+        .sample-sql {
+            display: block;
+            background: var(--bg-base);
+            padding: 12px;
+            border-radius: 6px;
+            font-family: var(--font-mono);
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-bottom: 8px;
+            overflow-x: auto;
+        }
+
+        /* Tables (Queries) */
+        .table-wrap {
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow-x: auto;
+        }
+        .q-table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+        }
+        .q-table th, .q-table td {
+            padding: 12px;
+            border-bottom: 1px solid var(--border);
+            font-size: 13px;
+        }
+        .q-table th { background: var(--bg-surface); color: var(--text-muted); font-weight: 500; }
+        .q-table tbody tr:last-child td { border-bottom: none; }
+        
+        .seq { color: var(--text-muted); width: 40px; }
+        .sql-code { font-family: var(--font-mono); color: #79c0ff; word-break: break-all; }
+        .t-ms { font-family: var(--font-mono); width: 80px; }
+        .t-ms.slow { color: var(--orange); font-weight: bold; }
+        .t-ms.very-slow { color: var(--red); font-weight: bold; }
+        .src-loc { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); }
+
+        /* JSON View */
+        .json-view {
+            background: var(--bg-surface);
+            padding: 16px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            font-family: var(--font-mono);
+            font-size: 13px;
+            white-space: pre-wrap;
+            overflow-x: auto;
+            line-height: 1.5;
+        }
+        .jk { color: #79c0ff; } /* string key */
+        .js { color: #a5d6ff; } /* string val */
+        .jn { color: #79c0ff; } /* number */
+        .jb { color: #ff7b72; } /* boolean */
+        .jz { color: #8b949e; } /* null */
+
+        /* Utility */
+        .tab-empty {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-muted);
+        }
+        .te-icon { font-size: 32px; margin-bottom: 16px; }
+        .tab-empty h4 { color: var(--text-main); margin-bottom: 8px; }
+        .se-item {
+            padding: 12px;
+            background: var(--bg-surface);
+            border-left: 3px solid var(--orange);
+            margin-bottom: 8px;
+            border-radius: 0 4px 4px 0;
+            font-family: var(--font-mono);
+            font-size: 13px;
+        }
+        .no-routes-placeholder {
+            padding: 20px;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 13px;
+        }
+    </style>
 </head>
 <body>
 
-<!-- ======================================================================
-     HEADER
-     ====================================================================== -->
-<header class="app-header">
-  <div class="header-brand">
-    <!-- Inline SVG logo — no external image dependency -->
-    <div class="header-logo-wrap">
-      <svg viewBox="0 0 30 30" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <rect width="30" height="30" rx="7" fill="#161b22"/>
-        <rect x="0.5" y="0.5" width="29" height="29" rx="6.5" stroke="#30363d"/>
-        <circle cx="15" cy="14" r="6.5" stroke="#58a6ff" stroke-width="1.8"/>
-        <circle cx="15" cy="14" r="2.5" fill="#58a6ff"/>
-        <line x1="19.7" y1="18.7" x2="23.5" y2="22.5" stroke="#58a6ff" stroke-width="1.8" stroke-linecap="round"/>
-      </svg>
-    </div>
-    <span class="header-title">Da Profiler</span>
-    <span class="header-divider">/</span>
-    <span class="header-subtitle">Developer Dashboard</span>
-  </div>
-  <div class="header-meta">
-    <span class="badge badge-routes">
-      <span id="hdr-count">{{ routes_count }}</span>&nbsp;routes
-    </span>
-    <span class="badge badge-debug">
-      <span class="dot"></span>
-      DEBUG active
-    </span>
-  </div>
-</header>
-
-<!-- ======================================================================
-     APP BODY
-     ====================================================================== -->
-<div class="app-body">
-
-  <!-- ====================================================================
-       SIDEBAR — Route Discovery Panel
-       ==================================================================== -->
-  <aside class="sidebar">
-    <div class="sidebar-header">
-      <div class="sidebar-title">Discovered Routes</div>
-      <div class="search-box">
-        <svg class="search-icon" viewBox="0 0 16 16" fill="currentColor">
-          <path d="M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398h-.001q.044.06.098.115l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.85-3.85a1 1 0 0 0-.115-.1zM12 6.5a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0"/>
-        </svg>
-        <input id="search-input"
-               class="search-input"
-               type="text"
-               placeholder="Filter by path, model, name…"
-               autocomplete="off"
-               oninput="filterRoutes()">
-      </div>
-      <div class="filter-row">
-        <button class="filter-chip active" onclick="setFilter('all', this)">All</button>
-        <button class="filter-chip" onclick="setFilter('executable', this)">Executable</button>
-        <button class="filter-chip" onclick="setFilter('params', this)">Has Params</button>
-      </div>
-    </div>
-    <div class="route-list" id="route-list"></div>
-  </aside>
-
-  <!-- ====================================================================
-       MAIN PANEL
-       ==================================================================== -->
-  <main class="main-panel" id="main-panel">
-
-    <!-- Empty state -->
-    <div class="empty-state" id="empty-state">
-      <svg class="empty-state-icon" viewBox="0 0 56 56" fill="none">
-        <circle cx="28" cy="26" r="14" stroke="currentColor" stroke-width="2"/>
-        <circle cx="28" cy="26" r="4" fill="currentColor"/>
-        <line x1="38" y1="36" x2="46" y2="44" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
-      </svg>
-      <h3>Select a Route to Profile</h3>
-      <p>Pick any endpoint from the sidebar. Da Profiler will execute it in an isolated, rolled-back transaction and surface N+1 bottlenecks with prescriptive ORM fixes.</p>
-    </div>
-
-    <!-- Profiler panel — shown after a route is selected -->
-    <div id="profiler-panel" style="display:none; flex-direction:column; flex:1; overflow:hidden;">
-
-      <!-- Route header -->
-      <div class="profiler-header">
-        <div class="profiler-path" id="prof-path"></div>
-        <div class="profiler-meta" id="prof-meta"></div>
-      </div>
-
-      <!-- Controls bar -->
-      <div class="controls-bar" id="controls-bar">
-
-        <!-- HTTP Method -->
-        <div class="ctrl-group">
-          <div class="ctrl-label">Method</div>
-          <select id="method-select"></select>
-        </div>
-
-        <!-- Seed count -->
-        <div class="ctrl-group">
-          <div class="ctrl-label">Seed Count</div>
-          <input type="number" id="seed-count" value="0" min="0" max="200"
-                 style="width:72px;" title="Number of mock model instances to seed before profiling">
-        </div>
-
-        <!-- Dynamic path parameter inputs — rendered per-route -->
-        <div class="ctrl-group" id="params-group" style="display:none;">
-          <div class="ctrl-label">
-            Path Parameters&nbsp;
-            <span class="ctrl-label-warn">* required</span>
-          </div>
-          <div class="param-row" id="params-inputs"></div>
-        </div>
-
-        <div class="ctrl-spacer"></div>
-
-        <!-- Run button -->
-        <button class="btn btn-primary" id="run-btn" onclick="runProfile()">
-          <svg class="btn-icon" width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
-            <path d="M10.804 8 5 4.633v6.734zm.792-.696a.802.802 0 0 1 0 1.392l-6.363 3.692C4.713 12.69 4 12.345 4 11.692V4.308c0-.653.713-.998 1.233-.696z"/>
-          </svg>
-          <div class="spinner"></div>
-          Run Sandbox
-        </button>
-      </div>
-
-      <!-- Results area -->
-      <div class="results-area" id="results-area">
-        <div class="results-placeholder" id="results-placeholder">
-          Hit <strong style="color:var(--text-secondary)">Run Sandbox</strong> to begin profiling this endpoint.
-        </div>
-        <div id="results-content" style="display:none;"></div>
-      </div>
-    </div><!-- /#profiler-panel -->
-
-  </main>
-</div><!-- /.app-body -->
-
-<!-- ======================================================================
-     EMBEDDED ROUTE DATA  (never exposed to external callers)
-     ====================================================================== -->
-<script id="routes-data" type="application/json">{{ routes_json|safe }}</script>
-
-<script>
-/* =========================================================================
-   GLOBALS
-   ========================================================================= */
-const ROUTES = JSON.parse(document.getElementById('routes-data').textContent);
-let selected   = null;   // currently selected RouteMetadata object
-let activeFilter = 'all';
-
-/* =========================================================================
-   CSRF — reads from <meta name="csrf-token"> (set by Django template tag).
-   Cookie fallback covers edge cases where the meta tag is stripped.
-   ========================================================================= */
-function getCsrfToken() {
-  const meta = document.querySelector('meta[name="csrf-token"]');
-  if (meta && meta.content) return meta.content;
-  // Cookie fallback
-  const m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
-  return m ? decodeURIComponent(m[1]) : '';
-}
-
-/* =========================================================================
-   METHOD BADGE
-   ========================================================================= */
-const METHOD_CLS = {
-  GET:'m-GET', POST:'m-POST', PUT:'m-PUT',
-  PATCH:'m-PATCH', DELETE:'m-DELETE',
-  HEAD:'m-HEAD', OPTIONS:'m-OPTIONS',
-};
-
-function mBadge(m) {
-  return `<span class="m-badge ${METHOD_CLS[m] || 'm-HEAD'}">${esc(m)}</span>`;
-}
-
-/* =========================================================================
-   SIDEBAR — RENDER ROUTE LIST
-   ========================================================================= */
-function renderRouteList(query = '') {
-  const q = query.toLowerCase();
-  const list = document.getElementById('route-list');
-
-  const visible = ROUTES.filter(r => {
-    if (activeFilter === 'executable' && !r.executable) return false;
-    if (activeFilter === 'params' && !r.path_params.length) return false;
-    if (q && !r.path.toLowerCase().includes(q)
-          && !r.view_name.toLowerCase().includes(q)
-          && !(r.target_model||'').toLowerCase().includes(q)) return false;
-    return true;
-  });
-
-  if (!visible.length) {
-    list.innerHTML = '<div class="no-routes-placeholder">No routes match your filter.</div>';
-    return;
-  }
-
-  list.innerHTML = visible.map(r => {
-    const idx       = ROUTES.indexOf(r);
-    const methods   = r.methods.map(mBadge).join('');
-    const paramTag  = r.path_params.length
-      ? `<span class="rc-params">⬡ ${r.path_params.length} param${r.path_params.length>1?'s':''}</span>`
-      : '';
-    const modelTag  = r.target_model
-      ? `<span class="rc-model">${esc(r.target_model)}</span>`
-      : '';
-    const isActive  = selected && ROUTES.indexOf(selected) === idx ? ' active' : '';
-    const isNotExec = !r.executable ? ' not-exec' : '';
-    const tooltip   = !r.executable ? ` title="${esc(r.reason_unexecutable||'Not executable')}"` : '';
-
-    return `<div class="route-card${isActive}${isNotExec}" data-idx="${idx}" onclick="selectRoute(${idx})"${tooltip}>
-      <div class="rc-path">${esc(r.path)}</div>
-      <div class="rc-meta">${methods}${paramTag}${modelTag}</div>
-    </div>`;
-  }).join('');
-}
-
-function filterRoutes() {
-  renderRouteList(document.getElementById('search-input').value);
-}
-
-function setFilter(f, btn) {
-  activeFilter = f;
-  document.querySelectorAll('.filter-chip').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-  filterRoutes();
-}
-
-/* =========================================================================
-   ROUTE SELECTION
-   ========================================================================= */
-function selectRoute(idx) {
-  if (!ROUTES[idx].executable) return;   // silently ignore non-executable
-  selected = ROUTES[idx];
-
-  // Sidebar highlight
-  document.querySelectorAll('.route-card').forEach(c => c.classList.remove('active'));
-  const card = document.querySelector(`.route-card[data-idx="${idx}"]`);
-  if (card) card.classList.add('active');
-
-  // Show profiler panel
-  document.getElementById('empty-state').style.display = 'none';
-  const panel = document.getElementById('profiler-panel');
-  panel.style.display = 'flex';
-
-  // Route header
-  document.getElementById('prof-path').textContent = selected.path;
-
-  const execBadge = selected.executable
-    ? `<span class="exec-ok">✓ executable</span>`
-    : `<span class="exec-no" title="${esc(selected.reason_unexecutable)}">✗ not executable</span>`;
-
-  const modelSpan = selected.target_model
-    ? `<span style="font-size:12px;font-family:var(--font-mono);color:var(--text-muted);">${esc(selected.target_model)}</span>`
-    : '';
-
-  document.getElementById('prof-meta').innerHTML =
-    selected.methods.map(mBadge).join(' ') +
-    `<span class="view-type-pill">${esc(selected.view_type)}</span>` +
-    modelSpan + execBadge;
-
-  // Method selector
-  const methodSel = document.getElementById('method-select');
-  methodSel.innerHTML = selected.methods.length
-    ? selected.methods.map(m => `<option value="${m}">${m}</option>`).join('')
-    : `<option value="GET">GET</option>`;
-
-  // Path param inputs  ← Refinement #1
-  const pGroup  = document.getElementById('params-group');
-  const pInputs = document.getElementById('params-inputs');
-
-  if (selected.path_params && selected.path_params.length) {
-    pGroup.style.display = 'flex';
-    pInputs.innerHTML = selected.path_params.map(p => {
-      const placeholder = p.converter === 'int'  ? '42'
-                        : p.converter === 'uuid' ? 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'
-                        : 'value';
-      return `<div class="param-item">
-        <div class="param-label">${esc(p.name)} <span class="param-conv">(${esc(p.converter)})</span></div>
-        <input type="text"
-               class="param-input"
-               data-name="${esc(p.name)}"
-               data-converter="${esc(p.converter)}"
-               placeholder="${placeholder}"
-               aria-label="Path parameter ${esc(p.name)}">
-      </div>`;
-    }).join('');
-  } else {
-    pGroup.style.display = 'none';
-    pInputs.innerHTML = '';
-  }
-
-  // Reset results pane
-  document.getElementById('results-placeholder').style.display = 'block';
-  document.getElementById('results-content').style.display = 'none';
-  document.getElementById('results-content').innerHTML = '';
-
-  document.getElementById('run-btn').disabled = false;
-}
-
-/* =========================================================================
-   SANDBOX EXECUTION
-   ========================================================================= */
-async function runProfile() {
-  if (!selected) return;
-
-  const btn = document.getElementById('run-btn');
-  btn.classList.add('loading');
-  btn.disabled = true;
-
-  // Collect typed path params  ← Refinement #1
-  const pathParams = {};
-  document.querySelectorAll('.param-input').forEach(inp => {
-    const raw = inp.value.trim();
-    if (!raw) return;
-    const name = inp.dataset.name;
-    const conv = inp.dataset.converter;
-    pathParams[name] = conv === 'int' ? parseInt(raw, 10) : raw;
-  });
-
-  const payload = {
-    route:        selected.path,
-    method:       document.getElementById('method-select').value,
-    seed_count:   Math.max(0, parseInt(document.getElementById('seed-count').value, 10) || 0),
-    path_params:  pathParams,
-    target_model: selected.target_model || null,
-  };
-
-  try {
-    // CSRF token injected per Refinement #2
-    const res = await fetch('/dqs/profile/', {
-      method:  'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-CSRFToken':  getCsrfToken(),
-      },
-      body: JSON.stringify(payload),
-    });
-
-    if (!res.ok && res.status === 403) {
-      renderResult({ error: 'Access denied. Da Profiler requires DEBUG=True.', status_code: 403 });
-      return;
-    }
-
-    const result = await res.json();
-    renderResult(result);
-  } catch (err) {
-    renderResult({ error: `Network error: ${err.message}`, status_code: 0 });
-  } finally {
-    btn.classList.remove('loading');
-    btn.disabled = false;
-  }
-}
-
-/* =========================================================================
-   RENDER RESULT
-   ========================================================================= */
-function renderResult(r) {
-  document.getElementById('results-placeholder').style.display = 'none';
-
-  const content = document.getElementById('results-content');
-  content.style.display = 'block';
-  content.classList.remove('animate-in');
-  void content.offsetWidth;
-  content.classList.add('animate-in');
-
-  const metrics  = r.metrics || {};
-  const queries  = r.queries || [];
-  const analysis = r.analysis || [];
-  const warnings = r.side_effect_warnings || [];
-  const n1       = !!metrics.n_plus_one_detected;
-  const sc       = r.status_code || 0;
-
-  // Fatal error with no query data
-  if (r.error && !queries.length) {
-    content.innerHTML = alertHtml('danger',
-      `<strong>Sandbox Error</strong><br>${esc(r.error)}`);
-    return;
-  }
-
-  // Status code styling
-  const scCls = sc >= 500 ? 'sc-5xx' : sc >= 400 ? 'sc-4xx' : 'sc-2xx';
-  const totalQ = metrics.total_queries ?? queries.length;
-  const dbMs   = metrics.db_time_ms   ?? 0;
-  const totMs  = metrics.total_time_ms ?? 0;
-  const uFps   = metrics.unique_fingerprints ?? 0;
-
-  // ---- Metrics grid ----
-  const metricsHtml = `
-    <div class="metrics-grid">
-      <div class="metric-card ${sc>=200&&sc<300?'mc-ok':sc>=400?'mc-warn':'mc-danger'}">
-        <div class="metric-label">HTTP Status</div>
-        <div class="metric-value"><span class="sc-pill ${scCls}">${sc||'—'}</span></div>
-        <div class="metric-sub">${esc(selected.path)}</div>
-      </div>
-      <div class="metric-card ${totalQ>15?'mc-danger':totalQ>5?'mc-warn':'mc-ok'}">
-        <div class="metric-label">Total Queries</div>
-        <div class="metric-value">${totalQ}</div>
-        <div class="metric-sub">${uFps} unique shape${uFps!==1?'s':''}</div>
-      </div>
-      <div class="metric-card ${dbMs>500?'mc-danger':dbMs>100?'mc-warn':'mc-ok'}">
-        <div class="metric-label">DB Time</div>
-        <div class="metric-value" style="font-size:20px;">${dbMs.toFixed(1)}<span style="font-size:12px;font-weight:400"> ms</span></div>
-        <div class="metric-sub">Total: ${totMs.toFixed(1)} ms</div>
-      </div>
-      <div class="metric-card ${n1?'mc-danger':'mc-ok'}">
-        <div class="metric-label">N+1 Status</div>
-        <div class="metric-value" style="font-size:17px;color:${n1?'var(--red)':'var(--green)'}">
-          ${n1?'⚠ Detected':'✓ Clean'}
-        </div>
-        <div class="metric-sub">${analysis.length} issue${analysis.length!==1?'s':''} found</div>
-      </div>
-    </div>`;
-
-  // ---- Top banner ----
-  const banner = n1
-    ? alertHtml('danger', `<strong>N+1 Query Bottleneck${analysis.length>1?'s':''} Detected</strong> — ${analysis.length} issue${analysis.length>1?'s':''} found. Apply the suggestions below to fix your queryset.`)
-    : alertHtml('success', '<strong>No N+1 Issues Found</strong> — Query patterns look healthy for this endpoint.');
-
-  // Non-fatal execution error notice
-  const errNotice = r.error
-    ? alertHtml('warning', esc(r.error))
-    : '';
-
-  // ---- N+1 Analysis tab ----
-  const n1Html = analysis.length
-    ? analysis.map(a => `
-        <div class="n1-card">
-          <div class="n1-card-head">
-            <div class="n1-fp">${esc(a.fingerprint||'')}</div>
-            <span class="n1-count">×${a.count}</span>
-          </div>
-          <div class="n1-card-body">
-            ${a.source_location
-              ? `<div class="n1-src">
-                  <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-                    <path d="M1 2.828c.885-.37 2.154-.769 3.388-.893 1.33-.134 2.458.063 3.112.752v9.746c-.935-.53-2.12-.603-3.213-.493-1.18.12-2.37.461-3.287.811zm7.5-.141c.654-.689 1.782-.886 3.112-.752 1.234.124 2.503.523 3.388.893v9.923c-.918-.35-2.107-.692-3.287-.81-1.094-.111-2.278-.039-3.213.492zM8 1.783C7.015.936 5.649.575 4.302.71 2.681.862 1.155 1.44.24 1.845a.387.387 0 0 0-.24.354v9.29c0 .232.278.37.49.271C1.484 11.076 2.875 10.5 4.002 10.5c1.267 0 1.793.757 2.998.757L7 5.525a.5.5 0 0 1 .5-.5H8z"/>
-                  </svg>
-                  ${esc(a.source_location)}
-                 </div>`
-              : ''}
-            <div class="n1-fix-box">
-              <div class="n1-fix-label">💡 Suggested Fix</div>
-              <div class="n1-fix-text">${esc(a.suggestion||'Review queryset relationships.')}</div>
-              <button class="copy-btn" onclick="copyFix(this, ${JSON.stringify(a.suggestion||'')})">
-                <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor">
-                  <path d="M4 1.5H3a2 2 0 0 0-2 2V14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V3.5a2 2 0 0 0-2-2h-1v1h1a1 1 0 0 1 1 1V14a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1h1z"/>
-                  <path d="M9.5 1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-3a.5.5 0 0 1-.5-.5v-1a.5.5 0 0 1 .5-.5zm-3-1A1.5 1.5 0 0 0 5 1.5v1A1.5 1.5 0 0 0 6.5 4h3A1.5 1.5 0 0 0 11 2.5v-1A1.5 1.5 0 0 0 9.5 0z"/>
-                </svg>
-                Copy Fix
-              </button>
+    <!-- SIDEBAR -->
+    <aside class="sidebar">
+        <div class="sidebar-header">
+            <h2>Da Profiler</h2>
+            <input type="text" id="search-input" class="search-box" placeholder="Search routes (Press '/' to focus)..." aria-label="Search routes">
+            <div class="filters">
+                <button class="filter-chip active" data-filter="all" aria-pressed="true">All</button>
+                <button class="filter-chip" data-filter="executable" aria-pressed="false">Executable</button>
+                <button class="filter-chip" data-filter="params" aria-pressed="false">Requires Params</button>
             </div>
-            ${a.sample_queries&&a.sample_queries.length>1
-              ? `<details>
-                  <summary>${a.sample_queries.length} captured sample queries</summary>
-                  ${a.sample_queries.map(sq=>`<code class="sample-sql">${esc(sq)}</code>`).join('')}
-                 </details>`
-              : ''}
-          </div>
-        </div>`).join('')
-    : tabEmpty('✅','No N+1 Issues Found','All query patterns are healthy for this endpoint.');
+        </div>
+        <div class="route-list-container" id="route-list">
+            <!-- Populated via JS -->
+        </div>
+    </aside>
 
-  // ---- Queries tab ----
-  const qHtml = queries.length
-    ? `<div class="table-wrap"><table class="q-table">
-        <thead><tr><th>#</th><th>SQL</th><th>ms</th><th>Source Location</th></tr></thead>
-        <tbody>
-        ${queries.map((q,i)=>{
-          const t = q.time_ms||0;
-          const tc = t>200?'very-slow':t>50?'slow':'';
-          return `<tr>
-            <td class="seq">${i+1}</td>
-            <td class="sql-code">${esc(q.sql||'')}</td>
-            <td class="t-ms ${tc}">${t.toFixed(2)}</td>
-            <td class="src-loc">${esc(q.source_location||'—')}</td>
-          </tr>`;
-        }).join('')}
-        </tbody>
-       </table></div>`
-    : tabEmpty('📭','No Queries Captured','No database queries were executed during this run.');
+    <!-- MAIN CONTENT -->
+    <main class="main-content">
+        <!-- Empty State -->
+        <div id="empty-state" class="empty-state">
+            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom:16px; opacity:0.5;">
+                <circle cx="12" cy="12" r="10"></circle>
+                <polyline points="12 16 16 12 12 8"></polyline>
+                <line x1="8" y1="12" x2="16" y2="12"></line>
+            </svg>
+            <h3>Select a route to profile</h3>
+            <p style="font-size: 13px; margin-top: 8px;">Pick an executable endpoint from the sidebar.</p>
+        </div>
 
-  // ---- Side effects tab ----
-  const seHtml = warnings.length
-    ? warnings.map(w=>`<div class="se-item">
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink:0;margin-top:1px">
-          <path d="M8 16A8 8 0 1 0 8 0a8 8 0 0 0 0 16m.93-9.412-1 4.705c-.07.34.029.533.304.533.194 0 .487-.07.686-.246l-.088.416c-.287.346-.92.598-1.465.598-.703 0-1.002-.422-.808-1.319l.738-3.468c.064-.293.006-.399-.287-.47l-.451-.081.082-.381 2.29-.287zM8 5.5a1 1 0 1 1 0-2 1 1 0 0 1 0 2"/>
-        </svg>
-        <span>${esc(w)}</span>
-      </div>`).join('')
-    : tabEmpty('🛡️','No Side Effect Warnings','No blocking calls or external I/O patterns detected.');
+        <!-- Profiler Panel -->
+        <div id="profiler-panel" class="profiler-panel" style="display: none;">
+            
+            <div class="prof-header">
+                <div id="prof-path">/api/example/</div>
+                <div id="prof-meta">
+                    <!-- Populated via JS -->
+                </div>
+            </div>
 
-  // ---- Response Body tab ----
-  const respHtml = r.response_body != null
-    ? `<div class="json-view">${syntaxJson(r.response_body)}</div>`
-    : tabEmpty('📭','No Response Body','The endpoint returned no parseable response body.');
+            <div id="controls-bar" class="controls-bar">
+                <div class="control-group">
+                    <label>Method</label>
+                    <select id="method-select"></select>
+                </div>
+                
+                <div id="params-group" class="control-group" style="display:none;">
+                    <label>Path Params</label>
+                    <div id="params-inputs"></div>
+                </div>
 
-  // ---- Assemble ----
-  content.innerHTML = `
-    ${metricsHtml}
-    ${errNotice}
-    ${banner}
-    <div class="tab-bar">
-      <button class="tab-btn active" onclick="switchTab('n1',this)">
-        N+1 Analysis
-        <span class="tab-count ${analysis.length?'tc-issues':''}">${analysis.length}</span>
-      </button>
-      <button class="tab-btn" onclick="switchTab('queries',this)">
-        All Queries
-        <span class="tab-count">${queries.length}</span>
-      </button>
-      <button class="tab-btn" onclick="switchTab('se',this)">
-        Side Effects
-        <span class="tab-count ${warnings.length?'tc-issues':''}">${warnings.length}</span>
-      </button>
-      <button class="tab-btn" onclick="switchTab('resp',this)">Response Body</button>
-    </div>
-    <div id="tab-n1"      class="tab-panel active">${n1Html}</div>
-    <div id="tab-queries" class="tab-panel">${qHtml}</div>
-    <div id="tab-se"      class="tab-panel">${seHtml}</div>
-    <div id="tab-resp"    class="tab-panel">${respHtml}</div>
-  `;
+                <div class="control-group">
+                    <label>Seed Data Count</label>
+                    <input type="number" id="seed-count" value="5" min="0" max="100" style="width: 80px;">
+                </div>
 
-  document.getElementById('results-area').scrollTop = 0;
-}
+                <button id="run-btn" class="run-btn">Profile Route</button>
+            </div>
 
-/* =========================================================================
-   TAB SWITCHING
-   ========================================================================= */
-function switchTab(name, btn) {
-  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
-  btn.classList.add('active');
-  document.getElementById('tab-' + name).classList.add('active');
-}
+            <div class="results-area" id="results-area">
+                <div id="results-placeholder" class="tab-empty" style="margin-top: 40px;">
+                    <div class="te-icon">⚡</div>
+                    <h4>Ready to Profile</h4>
+                    <p>Configure parameters above and hit Profile Route.</p>
+                </div>
+                
+                <div id="results-content" style="display: none;">
+                    <!-- Rendered via JS renderResult() -->
+                </div>
+            </div>
 
-/* =========================================================================
-   UTILITIES
-   ========================================================================= */
-function esc(s) {
-  return String(s||'')
-    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-    .replace(/"/g,'&quot;').replace(/'/g,'&#039;');
-}
+        </div>
+    </main>
 
-function alertHtml(type, body) {
-  const icons = {
-    danger:  '<path d="M7.938 2.016A.13.13 0 0 1 8.002 2a.13.13 0 0 1 .063.016.15.15 0 0 1 .054.057l6.857 11.667c.036.06.035.124.002.183a.2.2 0 0 1-.054.06.1.1 0 0 1-.066.017H1.146a.1.1 0 0 1-.066-.017.2.2 0 0 1-.054-.06.18.18 0 0 1 .002-.183L7.884 2.073a.15.15 0 0 1 .054-.057m1.044-.45a1.13 1.13 0 0 0-1.96 0L.165 13.233c-.457.778.091 1.767.98 1.767h13.713c.889 0 1.438-.99.98-1.767z"/><path d="M7.002 12a1 1 0 1 1 2 0 1 1 0 0 1-2 0M7.1 5.995a.905.905 0 1 1 1.8 0l-.35 3.507a.552.552 0 0 1-1.1 0z"/>',
-    success: '<path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14m0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16"/><path d="M10.97 4.97a.235.235 0 0 0-.02.022L7.477 9.417 5.384 7.323a.75.75 0 0 0-1.06 1.061L6.97 11.03a.75.75 0 0 0 1.079-.02l3.992-4.99a.75.75 0 0 0-1.071-1.05"/>',
-    warning: '<path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14m0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16"/><path d="M7.002 11a1 1 0 1 1 2 0 1 1 0 0 1-2 0M7.1 4.995a.905.905 0 1 1 1.8 0l-.35 3.507a.552.552 0 0 1-1.1 0z"/>',
-  };
-  return `<div class="alert alert-${type}">
-    <svg class="alert-icon" width="16" height="16" viewBox="0 0 16 16" fill="currentColor">${icons[type]||''}</svg>
-    <div>${body}</div>
-  </div>`;
-}
+    <!-- DATA INJECTION -->
+    <script id="routes-data" type="application/json">
+        {{ routes_json|safe }}
+    </script>
 
-function tabEmpty(icon, title, desc) {
-  return `<div class="tab-empty">
-    <div class="te-icon">${icon}</div>
-    <h4>${esc(title)}</h4>
-    <p>${esc(desc)}</p>
-  </div>`;
-}
-
-function copyFix(btn, text) {
-  navigator.clipboard.writeText(text).then(() => {
-    btn.classList.add('copied');
-    btn.textContent = '✓ Copied!';
-    setTimeout(() => {
-      btn.classList.remove('copied');
-      btn.innerHTML = `<svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor">
-        <path d="M4 1.5H3a2 2 0 0 0-2 2V14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V3.5a2 2 0 0 0-2-2h-1v1h1a1 1 0 0 1 1 1V14a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1h1z"/>
-        <path d="M9.5 1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-3a.5.5 0 0 1-.5-.5v-1a.5.5 0 0 1 .5-.5zm-3-1A1.5 1.5 0 0 0 5 1.5v1A1.5 1.5 0 0 0 6.5 4h3A1.5 1.5 0 0 0 11 2.5v-1A1.5 1.5 0 0 0 9.5 0z"/>
-      </svg> Copy Fix`;
-    }, 2000);
-  }).catch(() => {
-    // Clipboard API unavailable (non-HTTPS): graceful degradation
-    btn.textContent = '(select & copy manually)';
-  });
-}
-
-/* Basic JSON syntax highlighter — no dependencies */
-function syntaxJson(obj) {
-  let s;
-  try { s = JSON.stringify(obj, null, 2); }
-  catch { s = String(obj); }
-
-  return s
-    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-    .replace(
-      /("(\\u[\da-fA-F]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+-]?\d+)?)/g,
-      match => {
-        if (/^"/.test(match))    return /:$/.test(match) ? `<span class="jk">${match}</span>` : `<span class="js">${match}</span>`;
-        if (/true|false/.test(match)) return `<span class="jb">${match}</span>`;
-        if (/null/.test(match))       return `<span class="jz">${match}</span>`;
-        return `<span class="jn">${match}</span>`;
+    <!-- PROFILER LOGIC -->
+    <script>
+    /* =========================================================================
+       GLOBALS
+       ========================================================================= */
+    const ROUTES = JSON.parse(document.getElementById('routes-data').textContent || '[]');
+    let selected = null;
+    let activeFilter = 'all';
+    
+    /* =========================================================================
+       CSRF TOKEN RETRIEVAL
+       ========================================================================= */
+    function getCsrfToken() {
+      const meta = document.querySelector('meta[name="csrf-token"]');
+      if (meta && meta.content) return meta.content;
+      const m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+      return m ? decodeURIComponent(m[1]) : '';
+    }
+    
+    /* =========================================================================
+       METHOD BADGES
+       ========================================================================= */
+    const METHOD_CLS = {
+      GET: 'm-GET', POST: 'm-POST', PUT: 'm-PUT',
+      PATCH: 'm-PATCH', DELETE: 'm-DELETE',
+      HEAD: 'm-HEAD', OPTIONS: 'm-OPTIONS',
+    };
+    
+    function mBadge(m) {
+      return `<span class="m-badge ${METHOD_CLS[m] || 'm-HEAD'}">${esc(m)}</span>`;
+    }
+    
+    /* =========================================================================
+       SIDEBAR & ROUTE FILTERING
+       ========================================================================= */
+    function renderRouteList(query = '') {
+      const q = query.toLowerCase();
+      const list = document.getElementById('route-list');
+    
+      const visible = ROUTES.filter(r => {
+        if (activeFilter === 'executable' && !r.executable) return false;
+        if (activeFilter === 'params' && (!r.path_params || !r.path_params.length)) return false;
+        if (q && !r.path.toLowerCase().includes(q)
+              && !r.view_name.toLowerCase().includes(q)
+              && !(r.target_model || '').toLowerCase().includes(q)) return false;
+        return true;
+      });
+    
+      if (!visible.length) {
+        list.innerHTML = '<div class="no-routes-placeholder">No routes match your filter.</div>';
+        return;
       }
-    );
-}
-
-/* =========================================================================
-   INIT
-   ========================================================================= */
-document.addEventListener('DOMContentLoaded', () => {
-  renderRouteList();
-
-  // Enter key on controls bar triggers Run Sandbox
-  document.getElementById('controls-bar').addEventListener('keydown', e => {
-    if (e.key === 'Enter') runProfile();
-  });
-});
-</script>
+    
+      list.innerHTML = visible.map(r => {
+        const idx       = ROUTES.indexOf(r);
+        const methods   = r.methods.map(mBadge).join('');
+        const paramTag  = r.path_params && r.path_params.length
+          ? `<span class="rc-params">⬡ ${r.path_params.length} param${r.path_params.length > 1 ? 's' : ''}</span>`
+          : '';
+        const modelTag  = r.target_model
+          ? `<span class="rc-model">${esc(r.target_model)}</span>`
+          : '';
+        const isActive  = selected && ROUTES.indexOf(selected) === idx ? ' active' : '';
+        const isNotExec = !r.executable ? ' not-exec' : '';
+        const tooltip   = !r.executable ? ` title="${esc(r.reason_unexecutable || 'Not executable')}"` : '';
+    
+        return `<div class="route-card${isActive}${isNotExec}" data-idx="${idx}" ${tooltip}>
+          <div class="rc-path">${esc(r.path)}</div>
+          <div class="rc-meta">${methods}${paramTag}${modelTag}</div>
+        </div>`;
+      }).join('');
+    }
+    
+    function filterRoutes() {
+      renderRouteList(document.getElementById('search-input').value);
+    }
+    
+    function setFilter(f, btn) {
+      activeFilter = f;
+      document.querySelectorAll('.filter-chip').forEach(b => {
+        b.classList.remove('active');
+        b.setAttribute('aria-pressed', 'false');
+      });
+      btn.classList.add('active');
+      btn.setAttribute('aria-pressed', 'true');
+      filterRoutes();
+    }
+    
+    /* =========================================================================
+       ROUTE SELECTION
+       ========================================================================= */
+    function selectRoute(idx) {
+      if (!ROUTES[idx] || !ROUTES[idx].executable) return;
+      selected = ROUTES[idx];
+    
+      // Sidebar highlight
+      document.querySelectorAll('.route-card').forEach(c => c.classList.remove('active'));
+      const card = document.querySelector(`.route-card[data-idx="${idx}"]`);
+      if (card) card.classList.add('active');
+    
+      // Show profiler panel
+      document.getElementById('empty-state').style.display = 'none';
+      const panel = document.getElementById('profiler-panel');
+      panel.style.display = 'flex';
+    
+      // Header meta
+      document.getElementById('prof-path').textContent = selected.path;
+    
+      const execBadge = selected.executable
+        ? `<span class="exec-ok">✓ executable</span>`
+        : `<span class="exec-no" title="${esc(selected.reason_unexecutable)}">✗ not executable</span>`;
+    
+      const modelSpan = selected.target_model
+        ? `<span style="font-size:12px;font-family:var(--font-mono);color:var(--text-muted);">${esc(selected.target_model)}</span>`
+        : '';
+    
+      document.getElementById('prof-meta').innerHTML =
+        selected.methods.map(mBadge).join(' ') +
+        `<span class="view-type-pill">${esc(selected.view_type)}</span>` +
+        modelSpan + execBadge;
+    
+      // Method selector
+      const methodSel = document.getElementById('method-select');
+      methodSel.innerHTML = selected.methods.length
+        ? selected.methods.map(m => `<option value="${m}">${m}</option>`).join('')
+        : `<option value="GET">GET</option>`;
+    
+      // Path parameter inputs
+      const pGroup  = document.getElementById('params-group');
+      const pInputs = document.getElementById('params-inputs');
+    
+      if (selected.path_params && selected.path_params.length) {
+        pGroup.style.display = 'flex';
+        pInputs.innerHTML = selected.path_params.map(p => {
+          const placeholder = p.converter === 'int'  ? '42'
+                            : p.converter === 'uuid' ? 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'
+                            : 'value';
+          return `<div class="param-item" style="display:flex; flex-direction:column; gap:4px;">
+            <div class="param-label" style="font-size:11px; color:var(--text-muted);">${esc(p.name)}</div>
+            <input type="text"
+                   class="param-input"
+                   data-name="${esc(p.name)}"
+                   data-converter="${esc(p.converter)}"
+                   placeholder="${placeholder}"
+                   aria-label="Path parameter ${esc(p.name)}">
+          </div>`;
+        }).join('');
+      } else {
+        pGroup.style.display = 'none';
+        pInputs.innerHTML = '';
+      }
+    
+      // Reset results pane
+      document.getElementById('results-placeholder').style.display = 'block';
+      document.getElementById('results-content').style.display = 'none';
+      document.getElementById('results-content').innerHTML = '';
+    
+      document.getElementById('run-btn').disabled = false;
+    }
+    
+    /* =========================================================================
+       SANDBOX EXECUTION
+       ========================================================================= */
+    async function runProfile() {
+      if (!selected) return;
+    
+      const btn = document.getElementById('run-btn');
+      btn.classList.add('loading');
+      btn.disabled = true;
+    
+      // Collect path parameters
+      const pathParams = {};
+      document.querySelectorAll('.param-input').forEach(inp => {
+        const raw = inp.value.trim();
+        if (!raw) return;
+        const name = inp.dataset.name;
+        const conv = inp.dataset.converter;
+        pathParams[name] = conv === 'int' ? parseInt(raw, 10) : raw;
+      });
+    
+      const payload = {
+        route:        selected.path,
+        method:       document.getElementById('method-select').value,
+        seed_count:   Math.max(0, parseInt(document.getElementById('seed-count').value, 10) || 0),
+        path_params:  pathParams,
+        target_model: selected.target_model || null,
+      };
+    
+      try {
+        const res = await fetch('/dqs/profile/', {
+          method:  'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken':  getCsrfToken(),
+          },
+          body: JSON.stringify(payload),
+        });
+    
+        if (!res.ok && res.status === 403) {
+          renderResult({ error: 'Access denied. Da Profiler requires DEBUG=True.', status_code: 403 });
+          return;
+        }
+    
+        const result = await res.json();
+        renderResult(result);
+      } catch (err) {
+        renderResult({ error: `Network error: ${err.message}`, status_code: 0 });
+      } finally {
+        btn.classList.remove('loading');
+        btn.disabled = false;
+      }
+    }
+    
+    /* =========================================================================
+       RENDER RESULTS
+       ========================================================================= */
+    function renderResult(r) {
+      document.getElementById('results-placeholder').style.display = 'none';
+    
+      const content = document.getElementById('results-content');
+      content.style.display = 'block';
+    
+      const metrics  = r.metrics || {};
+      const queries  = r.queries || [];
+      const analysis = r.analysis || [];
+      const warnings = r.side_effect_warnings || [];
+      const n1       = !!metrics.n_plus_one_detected;
+      const sc       = r.status_code || 0;
+    
+      if (r.error && !queries.length) {
+        content.innerHTML = alertHtml('danger', `<strong>Sandbox Error</strong><br>${esc(r.error)}`);
+        return;
+      }
+    
+      const scCls  = sc >= 500 ? 'sc-5xx' : sc >= 400 ? 'sc-4xx' : sc >= 300 ? 'sc-3xx' : 'sc-2xx';
+      const totalQ = metrics.total_queries ?? queries.length;
+      const dbMs   = metrics.db_time_ms   ?? 0;
+      const totMs  = metrics.total_time_ms ?? 0;
+      const uFps   = metrics.unique_fingerprints ?? 0;
+    
+      // Metrics Grid
+      const metricsHtml = `
+        <div class="metrics-grid">
+          <div class="metric-card ${sc >= 200 && sc < 300 ? 'mc-ok' : sc >= 400 ? 'mc-warn' : 'mc-danger'}">
+            <div class="metric-label">HTTP Status</div>
+            <div class="metric-value"><span class="sc-pill ${scCls}">${sc || '—'}</span></div>
+            <div class="metric-sub">${esc(selected.path)}</div>
+          </div>
+          <div class="metric-card ${totalQ > 15 ? 'mc-danger' : totalQ > 5 ? 'mc-warn' : 'mc-ok'}">
+            <div class="metric-label">Total Queries</div>
+            <div class="metric-value">${totalQ}</div>
+            <div class="metric-sub">${uFps} unique shape${uFps !== 1 ? 's' : ''}</div>
+          </div>
+          <div class="metric-card ${dbMs > 500 ? 'mc-danger' : dbMs > 100 ? 'mc-warn' : 'mc-ok'}">
+            <div class="metric-label">DB Time</div>
+            <div class="metric-value">${dbMs.toFixed(1)}<span style="font-size:14px;font-weight:400;margin-left:4px;">ms</span></div>
+            <div class="metric-sub">Total: ${totMs.toFixed(1)} ms</div>
+          </div>
+          <div class="metric-card ${n1 ? 'mc-danger' : 'mc-ok'}">
+            <div class="metric-label">N+1 Status</div>
+            <div class="metric-value" style="color:${n1 ? 'var(--red)' : 'var(--green)'}">
+              ${n1 ? '⚠ Detected' : '✓ Clean'}
+            </div>
+            <div class="metric-sub">${analysis.length} issue${analysis.length !== 1 ? 's' : ''} found</div>
+          </div>
+        </div>`;
+    
+      const banner = n1
+        ? alertHtml('danger', `<strong>N+1 Query Bottleneck${analysis.length > 1 ? 's' : ''} Detected</strong> — ${analysis.length} issue${analysis.length > 1 ? 's' : ''} found. Apply the suggestions below to fix your queryset.`)
+        : alertHtml('success', '<strong>No N+1 Issues Found</strong> — Query patterns look healthy for this endpoint.');
+    
+      const errNotice = r.error ? alertHtml('warning', esc(r.error)) : '';
+    
+      // N+1 Tab HTML
+      const n1Html = analysis.length
+        ? analysis.map(a => `
+            <div class="n1-card">
+              <div class="n1-card-head">
+                <div class="n1-fp">${esc(a.fingerprint || '')}</div>
+                <span class="n1-count">×${a.count}</span>
+              </div>
+              <div class="n1-card-body">
+                ${a.source_location ? `<div class="n1-src">${esc(a.source_location)}</div>` : ''}
+                <div class="n1-fix-box">
+                  <div class="n1-fix-label">💡 Suggested Fix</div>
+                  <div class="n1-fix-text">${esc(a.suggestion || 'Review queryset relationships.')}</div>
+                  <button class="copy-btn" data-copy-text="${esc(a.suggestion || '')}">Copy Fix</button>
+                </div>
+                ${a.sample_queries && a.sample_queries.length > 1 ? `
+                  <details>
+                    <summary>${a.sample_queries.length} captured sample queries</summary>
+                    ${a.sample_queries.map(sq => `<code class="sample-sql">${esc(sq)}</code>`).join('')}
+                  </details>` : ''}
+              </div>
+            </div>`).join('')
+        : tabEmpty('✅', 'No N+1 Issues Found', 'All query patterns are healthy for this endpoint.');
+    
+      // Queries Tab HTML
+      const qHtml = queries.length
+        ? `<div class="table-wrap"><table class="q-table">
+            <thead><tr><th>#</th><th>SQL</th><th>ms</th><th>Source Location</th></tr></thead>
+            <tbody>
+            ${queries.map((q, i) => {
+              const t = q.time_ms || 0;
+              const tc = t > 200 ? 'very-slow' : t > 50 ? 'slow' : '';
+              return `<tr>
+                <td class="seq">${i + 1}</td>
+                <td class="sql-code">${esc(q.sql || '')}</td>
+                <td class="t-ms ${tc}">${t.toFixed(2)}</td>
+                <td class="src-loc">${esc(q.source_location || '—')}</td>
+              </tr>`;
+            }).join('')}
+            </tbody>
+           </table></div>`
+        : tabEmpty('📭', 'No Queries Captured', 'No database queries were executed during this run.');
+    
+      // Side Effects Tab HTML
+      const seHtml = warnings.length
+        ? warnings.map(w => `<div class="se-item"><span>${esc(w)}</span></div>`).join('')
+        : tabEmpty('🛡️', 'No Side Effect Warnings', 'No blocking calls or external I/O patterns detected.');
+    
+      // Response Body Tab HTML
+      const respHtml = r.response_body != null
+        ? `<div class="json-view">${syntaxJson(r.response_body)}</div>`
+        : tabEmpty('📭', 'No Response Body', 'The endpoint returned no parseable response body.');
+    
+      content.innerHTML = `
+        ${metricsHtml}
+        ${errNotice}
+        ${banner}
+        <div class="tab-bar" role="tablist">
+          <button class="tab-btn active" role="tab" aria-selected="true" data-tab="n1">
+            N+1 Analysis <span class="tab-count ${analysis.length ? 'tc-issues' : ''}">${analysis.length}</span>
+          </button>
+          <button class="tab-btn" role="tab" aria-selected="false" data-tab="queries">
+            All Queries <span class="tab-count">${queries.length}</span>
+          </button>
+          <button class="tab-btn" role="tab" aria-selected="false" data-tab="se">
+            Side Effects <span class="tab-count ${warnings.length ? 'tc-issues' : ''}">${warnings.length}</span>
+          </button>
+          <button class="tab-btn" role="tab" aria-selected="false" data-tab="resp">Response Body</button>
+        </div>
+        <div id="tab-n1" class="tab-panel active">${n1Html}</div>
+        <div id="tab-queries" class="tab-panel">${qHtml}</div>
+        <div id="tab-se" class="tab-panel">${seHtml}</div>
+        <div id="tab-resp" class="tab-panel">${respHtml}</div>
+      `;
+    
+      document.getElementById('results-area').scrollTop = 0;
+    }
+    
+    /* =========================================================================
+       UTILITIES & DELEGATION
+       ========================================================================= */
+    function esc(s) {
+      return String(s || '')
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+    }
+    
+    function alertHtml(type, body) {
+      return `<div class="alert alert-${type}"><div>${body}</div></div>`;
+    }
+    
+    function tabEmpty(icon, title, desc) {
+      return `<div class="tab-empty"><div class="te-icon">${icon}</div><h4>${esc(title)}</h4><p>${esc(desc)}</p></div>`;
+    }
+    
+    function copyToClipboard(btn, text) {
+      navigator.clipboard.writeText(text).then(() => {
+        btn.classList.add('copied');
+        btn.textContent = '✓ Copied!';
+        setTimeout(() => {
+          btn.classList.remove('copied');
+          btn.textContent = 'Copy Fix';
+        }, 2000);
+      }).catch(() => {
+        btn.textContent = '(failed to copy)';
+      });
+    }
+    
+    function syntaxJson(obj) {
+      let s;
+      try { s = JSON.stringify(obj, null, 2); }
+      catch { s = String(obj); }
+    
+      return s
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(
+          /("(\\u[\da-fA-F]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+-]?\d+)?)/g,
+          match => {
+            if (/^"/.test(match))    return /:$/.test(match) ? `<span class="jk">${match}</span>` : `<span class="js">${match}</span>`;
+            if (/true|false/.test(match)) return `<span class="jb">${match}</span>`;
+            if (/null/.test(match))       return `<span class="jz">${match}</span>`;
+            return `<span class="jn">${match}</span>`;
+          }
+        );
+    }
+    
+    /* =========================================================================
+       INITIALIZATION & EVENT BINDINGS
+       ========================================================================= */
+    document.addEventListener('DOMContentLoaded', () => {
+      renderRouteList();
+    
+      // Search Input Handler
+      const searchInp = document.getElementById('search-input');
+      if (searchInp) {
+        searchInp.addEventListener('input', filterRoutes);
+      }
+    
+      // Filter Chips Listener
+      document.querySelectorAll('.filter-chip').forEach(btn => {
+        btn.addEventListener('click', () => setFilter(btn.dataset.filter, btn));
+      });
+    
+      // Run Button Listener
+      const runBtn = document.getElementById('run-btn');
+      if (runBtn) {
+        runBtn.addEventListener('click', runProfile);
+      }
+    
+      // Event Delegation for Route Selection, Tabs & Copy Buttons
+      document.addEventListener('click', e => {
+        // Route card selection
+        const routeCard = e.target.closest('.route-card');
+        if (routeCard) {
+          selectRoute(parseInt(routeCard.dataset.idx, 10));
+          return;
+        }
+    
+        // Tab buttons
+        const tabBtn = e.target.closest('.tab-btn');
+        if (tabBtn) {
+          const tabName = tabBtn.dataset.tab;
+          document.querySelectorAll('.tab-btn').forEach(b => {
+            b.classList.remove('active');
+            b.setAttribute('aria-selected', 'false');
+          });
+          document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+          tabBtn.classList.add('active');
+          tabBtn.setAttribute('aria-selected', 'true');
+          document.getElementById('tab-' + tabName).classList.add('active');
+          return;
+        }
+    
+        // Copy buttons
+        const copyBtn = e.target.closest('.copy-btn');
+        if (copyBtn) {
+          copyToClipboard(copyBtn, copyBtn.dataset.copyText);
+        }
+      });
+    
+      // Enter key shortcut in controls bar to execute
+      document.getElementById('controls-bar').addEventListener('keydown', e => {
+        if (e.key === 'Enter') runProfile();
+      });
+    
+      // Keyboard hotkey: '/' to focus search input
+      document.addEventListener('keydown', e => {
+        if (e.key === '/' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) {
+          e.preventDefault();
+          searchInp.focus();
+        }
+      });
+    });
+    </script>
 </body>
 </html>
