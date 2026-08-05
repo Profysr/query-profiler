@@ -2,7 +2,6 @@
   <img src="imgs/logo.webp" alt="Da Profiler Logo" width="120">
 </p>
 
-
 [![PyPI version](https://img.shields.io/badge/pypi-v0.3.0-blue.svg)](https://pypi.org/project/da-profiler/)
 [![Python Version](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue)](https://www.python.org/)
 [![Django Support](https://img.shields.io/badge/django-4.2%20%7C%205.0%20%7C%205.1%20%7C%205.2-green)](https://www.djangoproject.com/)
