@@ -40,7 +40,7 @@
 | **v0.1.0** | Infra Scaffolding & Core AST Analyzer | ✅ **COMPLETED** |
 | **v0.2.0** | Django Introspector & Isolated Sandbox Execution | ✅ **COMPLETED** |
 | **v0.25.0** | Query Interceptor, `Target` Abstraction & Static AST Advisor | ✅ **COMPLETED** |
-| **v0.3.0** | Dynamic Path Converter Engine, Mock Data Generator & Request-Body Inference | 🟡 **IN PROGRESS** |
+| **v0.3.0** | Dynamic Path Converter Engine, Mock Data Generator & Request-Body Inference | ✅ **COMPLETED** |
 | **v0.4.0** | Model Context Protocol (MCP) Server & Agentic Loop | 🔲 **PLANNED** |
 | **v1.0.0** | Terminal CLI Linter & Interactive Dashboard (optional) | 🔲 **FUTURE** |
 
@@ -98,14 +98,14 @@
 
 ## v0.3.0 — Dynamic Path Converter Engine, Mock Data Generator & Request-Body Inference
 
-> Status: IN PROGRESS 🟡 
+> Status: COMPLETED ✅ 
 
 ### Django Adapter (`dqs/adapters/drf/`)
-- [ ] `converters.py` — parses `pattern.pattern.converters` to detect `int`, `str`, `slug`, `uuid` path converters.
-- [ ] `converters.py` — model resolution: explicit `view_class.queryset.model`/`view_class.model` first, FBV token-matching fallback.
-- [ ] `mock_generator.py` — `ModelBakeryGenerator.generate()`, Validation Recovery Flow, Uniqueness Guard, In-Memory Sample Cache.
-- [ ] **Path substitution helper** — pulls a real PK from a generated mock row and substitutes it into a `has_path_params: True` route.
-- [ ] **Request-body inference** — for POST/PUT/PATCH targets, read the view's `serializer_class` or `form_class` to determine expected field names/types to auto-populate `data=`.
+- [x] `converters.py` — parses `pattern.pattern.converters` to detect `int`, `str`, `slug`, `uuid` path converters.
+- [x] `converters.py` — model resolution: explicit `view_class.queryset.model`/`view_class.model` first, FBV token-matching fallback.
+- [x] `mock_generator.py` — `ModelBakeryGenerator.generate()`, Validation Recovery Flow, Uniqueness Guard, In-Memory Sample Cache.
+- [x] **Path substitution helper** — pulls a real PK from a generated mock row and substitutes it into a `has_path_params: True` route.
+- [x] **Request-body inference** — for POST/PUT/PATCH targets, read the view's `serializer_class` or `form_class` to determine expected field names/types to auto-populate `data=`.
 
 ---
 

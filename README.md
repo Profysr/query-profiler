@@ -1,87 +1,121 @@
-# Da Profiler 🔍
+<p align="center">
+  <img src="imgs/logo.webp" alt="Da Profiler Logo" width="120">
+</p>
 
-> The Agentic ORM Profiler & Performance Orchestrator for Django.
 
-`Da Profiler` (package `dqs`) discovers your Django project's endpoints automatically, executes them in isolated, self-rolling-back transactions, and detects N+1 queries using AST-based SQL fingerprinting — then hands the result to an AI coding agent (or a human) as a prescriptive, copy-pasteable ORM fix.
+[![PyPI version](https://img.shields.io/badge/pypi-v0.3.0-blue.svg)](https://pypi.org/project/da-profiler/)
+[![Python Version](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue)](https://www.python.org/)
+[![Django Support](https://img.shields.io/badge/django-4.2%20%7C%205.0%20%7C%205.1%20%7C%205.2-green)](https://www.djangoproject.com/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Code Style: Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 
-> ⚠️ **Note on scope:** this README reflects an active pivot from an earlier dashboard-first design toward an agent-first (MCP) design. If you're looking for the previous plain server-rendered dashboard direction, that's now a v1.0.0 optional feature rather than the core v0.4.0 deliverable — see [Roadmap](#project-status--roadmap).
+![Da Profiler Banner](imgs/da-profile-social-banner.png)
 
----
+> **The Agentic ORM Profiler & Performance Orchestrator for Django.**
 
-## Table of Contents
-
-- [Why DQS](#why-dqs)
-- [How DQS Compares](#how-dqs-compares)
-- [Key Features](#key-features)
-- [How It Works: From Query to Fix Suggestion](#how-it-works-from-query-to-fix-suggestion)
-- [Dynamic Route Resolution](#dynamic-route-resolution)
-- [The Agentic Loop (MCP)](#the-agentic-loop-mcp)
-- [Architecture](#architecture)
-- [Requirements](#requirements)
-- [Quickstart](#quickstart-development-environment)
-- [Running Tests](#running-tests)
-- [Project Status & Roadmap](#project-status--roadmap)
-- [Contributing](#contributing)
+`Da Profiler` (package `dqs`) discovers your Django project's endpoints automatically, executes them safely in isolated, self-rolling-back transaction savepoints, intercepts queries at the DB-driver boundary, and detects N+1 queries using AST-based SQL fingerprinting — then hands the result to an AI coding agent (or a human) as a prescriptive, copy-pasteable ORM fix.
 
 ---
 
-## Why DQS
+## ⚡ Quick Navigation
 
-Traditional profilers (Django Silk, Django Debug Toolbar) are reactive and human-dependent — you have to click through your app to generate traffic, then manually read through logged SQL to spot a bottleneck. DQS flips that:
-
-1. **Proactive discovery** — scans your Django URL tree automatically. No manual clicking required to generate the endpoint list.
-2. **Zero DB footprint** — every profiling run happens inside a `transaction.atomic()` savepoint and rolls back immediately after. Nothing persists.
-3. **Prescriptive fixes** — uses `sqlglot` AST parsing to normalize queries and output the exact `.select_related()` / `.prefetch_related()` call to add, not just a raw query dump.
-4. **Agent-first** — exposes an MCP server so AI coding agents (Claude, Cursor, Windsurf) can autonomously profile an endpoint, detect N+1s, rewrite the view, and re-verify the fix in a closed loop.
-
----
-
-## How DQS Compares
-
-| Feature | Django Silk | DQS |
-|---|---|---|
-| Discovery | Passive — only logs URLs you physically hit | Active — scans the URL tree automatically |
-| Database overhead | High — persists request/response logs to your DB | Zero — runs entirely via rollback |
-| N+1 detection | Manual inspection of logged SQL | Automated AST fingerprinting (`sqlglot`) |
-| Output | Raw SQL + timing | Prescriptive ORM fix + enriched metrics |
-| CI/automation | Difficult to run headlessly | Built for CLI, pytest, and agent workflows |
-| AI agent integration | None | Native MCP server (stdio / SSE) |
+- [Key Features](#-key-features)
+- [Why Da Profiler?](#-why-da-profiler)
+- [Feature Comparison](#-feature-comparison)
+- [Architecture & Design](#-architecture--design)
+- [How It Works](#-how-it-works)
+- [Dynamic Route & Mock Data Engine](#-dynamic-route--mock-data-engine)
+- [AI Agent Integration (MCP)](#-ai-agent-integration-mcp)
+- [Installation & Quickstart](#-installation--quickstart)
+- [Running Tests](#-running-tests)
+- [Project Documentation](#-project-documentation)
+- [Contributing & License](#-contributing--license)
 
 ---
 
-## Key Features
+## ✨ Key Features
 
-- **Zero-trace sandbox** — profiles queries inside `transaction.atomic()` savepoints, rolled back automatically after every run.
-- **AST-based fingerprinting** — `sqlglot` parses SQL into an AST, strips literals, normalizes table aliases, and collapses `IN (...)` clauses of any length into one shape.
-- **Dynamic route resolution** — profiles routes with path converters (`/books/<int:pk>/`) by generating a real mock row and substituting a concrete value automatically.
-- **Actionable fix suggestions** — flags queries repeated 3+ times with the same fingerprint and suggests the exact ORM fix.
-- **Agentic MCP server** — lets an AI IDE agent call `list_django_routes`, `profile_endpoint`, and `seed_mock_data` directly, closing the loop from detection to fix to re-verification without a human in the middle.
-- **Extensible by design** — a framework-agnostic core (`dqs/core/`) stays fully decoupled from Django-specific code (`dqs/adapters/drf/`).
+- 🛡️ **Zero-Trace Transaction Sandbox**: Runs profile targets inside `transaction.atomic()` savepoints, automatically rolling back mutations post-execution. Real DB state is never modified.
+- 🧬 **AST-Based SQL Fingerprinting**: Powered by `sqlglot`. Strips numeric/string literals, normalizes dynamic `IN (...)` parameter lists, and canonicalizes table aliases to eliminate false positives.
+- 🎯 **Target Discovery Engine**: Auto-discovers Django views (FBV, CBV, DRF ViewSets), signal receivers (`post_save`, `pre_save`, etc.), Celery tasks, and Channels ASGI consumers.
+- 🔮 **Dynamic Parameter & Payload Resolution**: Resolves parameterized routes (`/books/<int:pk>/`) and automatically infers DRF serializer mock payloads for `POST`, `PUT`, and `PATCH` requests.
+- 💡 **Prescriptive Fix Suggestions**: Pinpoints N+1 origins to precise user code lines and outputs exact `.select_related()` or `.prefetch_related()` remediation logic.
+- 🤖 **Agent-First (MCP Ready)**: Exposes tool hooks (`list_django_routes`, `profile_endpoint`, `seed_mock_data`) for Cursor, Claude Code, and Windsurf to profile, fix, and verify performance headlessly.
+- 🧱 **Decoupled Engine Design**: Strict separation between framework-agnostic analysis (`dqs/core/`) and Django/DRF adapters (`dqs/adapters/drf/`).
 
 ---
 
-## How It Works: From Query to Fix Suggestion
+## 💡 Why Da Profiler?
 
-### Example — Classic Foreign Key N+1
+Traditional profilers (e.g. Django Debug Toolbar, Django Silk) are **reactive and human-dependent**:
+1. You must manually click around a web browser to populate query logs.
+2. Logged queries pollute development database tables or log outputs.
+3. You get raw SQL outputs rather than structured, actionable ORM fixes.
 
-**1. The unoptimized view**
+`Da Profiler` flips this workflow:
+- **Proactive & Headless**: Scans URL pattern trees without manual browsing.
+- **Zero-Footprint DB Execution**: Transactions roll back immediately.
+- **Prescriptive ORM Remediation**: Converts raw AST query structures into exact Django queryset code fixes.
+- **Agentic Loop**: Designed for automated dev agents to inspect, refactor, and re-verify performance fixes end-to-end.
 
+---
+
+## 📊 Feature Comparison
+
+| Feature | Django Debug Toolbar | Django Silk | Da Profiler (`dqs`) |
+|---|---|---|---|
+| **Discovery** | Manual page rendering | Passive traffic logging | **Active URL & signal discovery tree** |
+| **DB Footprint** | None | High (persists log rows to DB) | **Zero (100% savepoint rollback)** |
+| **N+1 Detection** | Visual inspect per request | Manual SQL review | **Automated AST fingerprinting (`sqlglot`)** |
+| **Fix Generation** | None | None | **Prescriptive ORM (`.select_related()`)** |
+| **Param Resolution**| Manual input | Manual traffic | **Automatic mock seeding & URL reversal** |
+| **CI / AI Workflow**| Not supported | Not supported | **Native MCP server for AI IDE agents** |
+
+---
+
+## 🏗️ Architecture & Design
+
+Da Profiler enforces a clean architectural separation:
+
+```
+dqs/
+├── core/                  # Pure Python engine — zero Django dependencies
+│   ├── analyzer.py        # AST SQL fingerprinting & N+1 detection
+│   ├── static_advisor.py  # Pure AST code scanner (loops & blocking I/O)
+│   └── targets.py         # Framework-agnostic Target model
+└── adapters/
+    └── drf/               # Django & DRF integration adapter
+        ├── discovery.py   # Route, signal, task, and consumer discovery
+        ├── runner.py      # Isolated savepoint execution runner
+        ├── converters.py  # Dynamic path parameter resolver
+        ├── body_inferrer.py# Serializer request payload inferrer
+        └── mock_generator.py # Model Bakery mock data engine
+```
+
+> 📖 For full system diagrams and execution sequence specifications, check out [`ARCHITECTURE.md`](./ARCHITECTURE.md).
+
+---
+
+## 🔍 How It Works
+
+### Step-by-Step N+1 Identification
+
+#### 1. Unoptimized View Code
 ```python
 # sample_app/views.py
 from django.http import JsonResponse
 from .models import Book
 
 def list_books(request):
-    books = Book.objects.all()  # Query #1
+    books = Book.objects.all()  # Initial query
     data = [
-        {"title": book.title, "author": book.author.name}  # Queries #2, #3, #4...
+        {"title": book.title, "author": book.author.name}  # N+1 queries in loop
         for book in books
     ]
     return JsonResponse(data, safe=False)
 ```
 
-**2. The raw SQL Django actually runs**
-
+#### 2. Captured SQL Execution
 ```sql
 SELECT "id", "title", "author_id" FROM "sample_app_book";
 SELECT "id", "name" FROM "sample_app_author" WHERE "id" = 10;
@@ -89,164 +123,122 @@ SELECT "id", "name" FROM "sample_app_author" WHERE "id" = 25;
 SELECT "id", "name" FROM "sample_app_author" WHERE "id" = 42;
 ```
 
-> Simplified for readability — Django's actual `CaptureQueriesContext` output table-qualifies every column (e.g. `"sample_app_author"."id"`). The fingerprinting logic handles both forms identically.
-
-**3. DQS normalizes them to one fingerprint**
-
-`dqs.core.analyzer.fingerprint()` parses each query with `sqlglot`, replacing the changing literal (`10`, `25`, `42`) with a placeholder, so all three collapse to:
-
+#### 3. AST Normalization (`dqs.core.analyzer`)
+Queries parse into AST representations and collapse to a single fingerprint:
 ```sql
 SELECT "id", "name" FROM "sample_app_author" WHERE "id" = ?
 ```
 
-**4. DQS flags it**
-
+#### 4. Prescriptive Report Output
 ```json
 {
   "fingerprint": "SELECT \"id\", \"name\" FROM \"sample_app_author\" WHERE \"id\" = ?",
   "count": 3,
+  "source_location": "sample_app/views.py:7",
   "suggestion": "Add .select_related('author') to your QuerySet."
 }
 ```
 
-**5. The fix**
+---
 
-```python
-books = Book.objects.select_related('author').all()
+## 🛠️ Dynamic Route & Mock Data Engine
+
+For routes like `/books/<int:pk>/` or `/authors/<uuid:id>/`:
+
+```
+1. Introspect Path Converters  ---> 2. Resolve Model & Seed Mock  ---> 3. Reverse Executable URL
+   (int, uuid, slug, str, path)     (via model_bakery & cache)           (/books/42/)
 ```
 
-Same AST engine also collapses variable-length `IN (...)` clauses (`IN (1,2)` and `IN (1,2,3,4,5)` both fingerprint to `IN (?)`) — a naive regex-based normalizer can't do this reliably, since it has no concept of the expression's structure.
+`POST` / `PUT` request bodies are dynamically built by `dqs.adapters.drf.body_inferrer` by inspecting DRF serializers (`serializer_class`) or Django forms.
 
 ---
 
-## Dynamic Route Resolution
+## 🤖 AI Agent Integration (MCP)
 
-Many real endpoints look like `/books/<int:pk>/hash/<uuid:hash>/`, not a bare path. DQS resolves these in three steps before it can actually call the route:
+Da Profiler provides a Model Context Protocol (MCP) server for Cursor, Windsurf, and Claude Code:
 
 ```
-1. Introspect Path Converters
-   Reads pattern.pattern.converters (Int, UUID, Slug, ...)
-        │
-        ▼
-2. Resolve Target Django Model
-   Inspects view_class.queryset.model or URL token hints
-        │
-        ▼
-3. Inject Concrete Parameters
-   Generates a temporary mock row -> substitutes real values
-   (e.g. /books/12/hash/9f2b.../)
++------------------+         list_django_routes()         +------------------+
+|                  | -----------------------------------> |                  |
+|   AI IDE Agent   |        profile_endpoint(target)      |   Da Profiler    |
+| (Cursor / Claude)| -----------------------------------> |    MCP Server    |
+|                  | <----------------------------------- |                  |
++------------------+     Enriched Findings & ORM Fix      +------------------+
 ```
-
-If a route uses a custom converter DQS can't confidently resolve, an explicit override can be passed instead of guessing — via the MCP tool call (`path_params={"pk": 42}`) or the equivalent Python-level call, rather than DQS silently assuming a value.
 
 ---
 
-## The Agentic Loop (MCP)
+## 🚀 Installation & Quickstart
 
-```
-AI IDE Agent (Cursor/Claude)
-   │
-   ├─ 1. list_django_routes()            → discovers endpoints
-   ├─ 2. profile_endpoint(route, method)  → runs the sandbox, captures queries
-   ├─ 3. AST fingerprint + fix suggestion → returned as enriched JSON
-   ├─    [ Agent rewrites views.py ]
-   └─ 4. profile_endpoint(...) again      → verifies query count dropped (e.g. 50 → 2)
-```
-
-This closes the loop end-to-end: an agent can detect a bottleneck, apply the suggested `.select_related()`/`.prefetch_related()` fix itself, and immediately re-run the same profiling call to confirm the fix actually worked — without a human manually re-testing in a browser.
-
----
-
-## Architecture
-
-```
-dqs/
-├── core/                  # Framework-agnostic — analyzer, fingerprinting. Never imports Django.
-│   └── analyzer.py
-├── adapters/
-│   └── django/            # All Django-specific code lives here only.
-│       ├── introspector.py    # discovers routes, classifies CBV/DRF/FBV
-│       ├── runner.py          # isolated, rolled-back execution
-│       ├── converters.py      # dynamic path-param resolution
-│       └── mock_generator.py  # model_bakery wrapper + validation recovery
-└── mcp/
-    └── server.py           # MCP server exposing DQS as agent-callable tools
-
-demo_project/                # Throwaway Django project used only for local dev/testing.
-                              # Not shipped as part of the package.
-```
-
-**The rule that matters most:** `dqs/core/` never imports anything from `dqs/adapters/`. This one-way boundary is what lets a second framework adapter (or the MCP layer itself) build on top of the analysis engine without ever needing to modify it.
-
----
-
-## Requirements
-
-- Docker & Docker Compose (v2 syntax)
-- No local Python install required for development
-
----
-
-## Quickstart (Development Environment)
+### Installation
 
 ```bash
-# 1. Clone and set up environment variables
-git clone <repo-url> && cd django-query-sandbox
+pip install da-profiler[django]
+```
+
+Add `dqs.adapters.drf` to your `INSTALLED_APPS` (development environment only):
+
+```python
+# settings.py
+if DEBUG:
+    INSTALLED_APPS += ["dqs.adapters.drf"]
+```
+
+---
+
+### Development Setup (Docker)
+
+```bash
+# 1. Clone repository
+git clone https://github.com/Profysr/query-profiler.git
+cd query-profiler
+
+# 2. Configure environment
 cp .env.example .env
 
-# 2. Build the image and start Postgres
+# 3. Build containers and start Postgres
 docker compose build
 docker compose up -d db
 
-# 3. First-time only: scaffold the demo Django project
-docker compose run --rm web django-admin startproject demo_project .
-
-# 4. Start the full stack
+# 4. Start stack and run migrations
 docker compose up -d
-
-# 5. Run migrations
 docker compose exec web python manage.py migrate
-
-# 6. Create a superuser
-docker compose exec web python manage.py createsuperuser
-```
-
-**Day-to-day commands:**
-
-```bash
-docker compose up -d           # start everything
-docker compose logs -f web     # tail app logs
-docker compose exec web bash   # shell into the running container
-docker compose down            # stop everything (-v also wipes the DB volume)
 ```
 
 ---
 
-## Running Tests
+## 🧪 Running Tests
+
+Run the test suite inside the Docker container using `pytest`:
 
 ```bash
+# Run all tests
 docker compose run --rm web pytest
-```
 
-```
-tests/
-├── test_analyzer.py       # dqs/core/analyzer.py — pure functions, no Django needed
-├── test_introspector.py   # dqs/adapters/drf/introspector.py
-└── test_runner.py         # dqs/adapters/drf/runner.py — needs the demo_project DB
+# Run pure core tests (framework-agnostic, zero DB)
+docker compose run --rm web pytest -m core
+
+# Run Django adapter tests
+docker compose run --rm web pytest -m django
 ```
 
 ---
 
-## Project Status & Roadmap
+## 📚 Project Documentation
 
-Full detail, file-by-file, lives in [`ROADMAP.md`](./ROADMAP.md). The reasoning behind each architectural decision, including why certain things were deliberately left out of earlier versions — lives in [`CHANGELOG.md`](./CHANGELOG.md).
+- 📄 [`ARCHITECTURE.md`](./ARCHITECTURE.md) — System design, sequence flows, and component breakdown.
+- 📋 [`CHANGELOG.md`](./CHANGELOG.md) — Detailed version history, releases, and architectural decisions.
+- 🗺️ [`ROADMAP.md`](./ROADMAP.md) — Development milestones, planned adapters, and feature timelines.
+- 🤝 [`CONTRIBUTING.md`](./CONTRIBUTING.md) — Contribution guidelines, dev setup, and commit standards.
+- 🔒 [`SECURITY.md`](./SECURITY.md) — Security policy and vulnerability reporting.
+- 📜 [`CODE_OF_CONDUCT.md`](./CODE_OF_CONDUCT.md) — Community guidelines.
 
 ---
 
-## Contributing
+## 📄 Contributing & License
 
-See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for setup steps, coding standards, and the PR process. The short version: respect the `core`/`adapters` boundary, run `pytest` before opening a PR, and check `ROADMAP.md`/`CHANGELOG.md` before touching fingerprinting logic or adding a new adapter.
+Contributions are welcome! Please review [`CONTRIBUTING.md`](./CONTRIBUTING.md) before opening a pull request.
 
-## License
-
-MIT — see [`LICENSE`](./LICENSE). 
+Distributed under the **MIT License**. See [`LICENSE`](./LICENSE) for details.
+ 

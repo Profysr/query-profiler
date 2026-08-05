@@ -88,6 +88,8 @@ from dqs.adapters.drf.introspector import RouteMetadata
 from django.db.models.signals import post_save, pre_save, post_delete, pre_delete
 from dqs.core.targets import Target
 from dqs.core.static_advisor import StaticASTAdvisor
+from dqs.adapters.drf.body_inferrer import infer_request_body
+
 
 @dataclass
 class ExecutionResult:
@@ -100,6 +102,7 @@ class ExecutionResult:
     side_effect_warnings: List[str] = field(default_factory=list)
     response_body: Optional[Any] = None
     seeded_records: List[Dict[str, Any]] = field(default_factory=list)
+    request_spec: Optional[Dict[str, Any]] = None
 
 class DjangoSandboxRunner:
     """
@@ -214,14 +217,11 @@ class DjangoSandboxRunner:
         seed_count: int = 1,
     ) -> Dict[str, Any]:
         """
-        Pipeline Entry 3: Seeds mock resources using baker inside safe transaction boundaries.
+        Pipeline Entry 3: Seeds mock resources using ModelBakeryGenerator inside safe transaction boundaries.
         """
         try:
-            app_label, model_name = target_model.split(".")
-            model_class = apps.get_model(app_label, model_name)
-            instances = baker.make(model_class, _quantity=seed_count)
-            if not isinstance(instances, list):
-                instances = [instances]
+            from dqs.adapters.drf.mock_generator import ModelBakeryGenerator
+            instances = ModelBakeryGenerator.generate(target_model, quantity=seed_count, commit=True)
             return {
                 "status_code": 201,
                 "seeded": True,
@@ -294,10 +294,38 @@ class DjangoSandboxRunner:
             auto_generate_if_missing=True,
         )
 
+        request_spec = self.build_request_spec(
+            url_name_or_path=url_name_or_path,
+            method=method,
+            resolved_path=resolved_path,
+            route_meta=route_meta,
+            resolved_params=resolved_params,
+            query_params=query_params,
+            data=data,
+        )
+
+        # Handover Rule: If any path parameter remains unresolved, do NOT send a dummy request or fail with 404. Hand off directly to agent/user!
+        unresolved_names = [p["name"] for p in request_spec["path_params"] if p["status"] == "UNRESOLVED"]
+        if unresolved_names:
+            return ExecutionResult(
+                route=url_name_or_path,
+                status_code=400,
+                error=(
+                    f"Unresolved path parameter(s): {', '.join(unresolved_names)}. "
+                    f"Please provide explicit values in 'path_params' or seed the target model '{target_model}'."
+                ),
+                request_spec=request_spec,
+            )
+
         try:
             resolved_match = resolve(resolved_path)
         except Exception as e:
-            return ExecutionResult(route=resolved_path, status_code=404, error=f"Route resolution failed: {str(e)}")
+            return ExecutionResult(
+                route=resolved_path,
+                status_code=404,
+                error=f"Route resolution failed: {str(e)}",
+                request_spec=request_spec,
+            )
 
         request_func = getattr(self.factory, method.lower(), None)
         if not request_func:
@@ -312,21 +340,21 @@ class DjangoSandboxRunner:
             def _seed():
                 seeded_info = []
                 if seed_count > 0 and target_model:
-                    model_class = apps.get_model(target_model)
-                    created_instances = baker.make(model_class, _quantity=seed_count)
-
-                    if not isinstance(created_instances, list):
-                        created_instances = [created_instances]
-
+                    from dqs.adapters.drf.mock_generator import ModelBakeryGenerator
+                    created_instances = ModelBakeryGenerator.generate(target_model, quantity=seed_count, commit=True)
                     seeded_info = [{"pk": obj.pk, "__str__": str(obj)} for obj in created_instances]
                 return seeded_info
 
             # Only request construction + view execution runs inside the interceptor.
             def _sandbox_execution():
-                if method in {"POST", "PUT", "PATCH"} and data is not None:
-                    request = request_func(resolved_path, data=json.dumps(data), content_type=content_type)
+                request_data = data
+                if method in {"POST", "PUT", "PATCH"} and request_data is None:
+                    request_data = infer_request_body(resolved_match.func)
+
+                if method in {"POST", "PUT", "PATCH"} and request_data is not None:
+                    request = request_func(resolved_path, data=json.dumps(request_data), content_type=content_type)
                 else:
-                    request = request_func(resolved_path, data=query_params if method == "GET" else (data or {}))
+                    request = request_func(resolved_path, data=query_params if method == "GET" else (request_data or {}))
 
                 request.user = user if user is not None else AnonymousUser()
                 request.resolver_match = resolved_match
@@ -544,3 +572,36 @@ class DjangoSandboxRunner:
             pass
             
         return list(set(warnings))
+
+    def build_request_spec(
+        self,
+        url_name_or_path: str,
+        method: str,
+        resolved_path: str,
+        route_meta: Any,
+        resolved_params: Dict[str, Any],
+        query_params: Optional[Dict[str, Any]] = None,
+        data: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Constructs a structured Postman-style Request Spec contract for callers
+        (Web UI, CLI, or MCP Coding Agent).
+        """
+        path_params_spec = []
+        for p in getattr(route_meta, "path_params", []):
+            is_resolved = p.name in resolved_params
+            path_params_spec.append({
+                "name": p.name,
+                "converter": p.converter,
+                "status": "RESOLVED" if is_resolved else "UNRESOLVED",
+                "value": resolved_params.get(p.name),
+            })
+
+        return {
+            "route": url_name_or_path,
+            "method": method.upper(),
+            "resolved_url": resolved_path,
+            "path_params": path_params_spec,
+            "query_params": query_params or {},
+            "body": data,
+        }

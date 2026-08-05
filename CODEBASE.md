@@ -57,7 +57,9 @@ django-profiler/
 │           ├── apps.py           ← Django AppConfig (startup safety check)
 │           ├── discovery.py      ← Finds all routes, signals, tasks in the project
 │           ├── introspector.py   ← Reads URL tree; extracts route metadata
+│           ├── body_inferrer.py  ← Request body payload inferrer for DRF serializers / forms
 │           ├── converters.py     ← Resolves URL path parameters to real values
+│           ├── mock_generator.py ← Model mock data generator with validation recovery & uniqueness guards
 │           ├── query_interceptor.py ← Hooks into Django DB driver to capture queries
 │           ├── runner.py         ← Executes sandboxed requests; orchestrates everything
 │           └── schema_advisor.py ← Checks DB schema for missing indexes / PK strategy
@@ -71,6 +73,7 @@ django-profiler/
 │   └── adapters/
 │       └── drf/
 │           ├── conftest.py       ← DRF-specific fixtures (fake Django app, models, views)
+│           ├── test_body_inferrer.py
 │           ├── test_converters.py
 │           ├── test_discovery.py
 │           ├── test_introspector.py
@@ -362,24 +365,15 @@ Normalizes a Django converter class name string to a simple type.
 **`extract_converters_from_pattern(pattern) -> List[PathParam]`**
 Reads `RoutePattern.converters` (the dict Django builds from `<int:pk>` in a path string) and returns a list of `PathParam` objects.
 
-**`generate_synthetic_fallback(param_name, converter_type) -> Any`**
-When no database record exists to get a real value from, returns a deterministic fake value:
-| Converter type | Returns |
-|---|---|
-| `int` | `1` |
-| `uuid` | `"123e4567-e89b-12d3-a456-426614174000"` |
-| `slug` | `"test-slug"` |
-| `str` / `path` | `"test-param"` (or `"test-slug"` if param name contains `"slug"`) |
-
 **`extract_from_model_instance(instance, param_name, lookup_map) -> Any`**
-Given a real model instance (e.g. a `Book` object), extracts the value for a named path parameter. Uses `lookup_map` to translate URL kwarg names to model field names. Falls back through `pk`, `id`, `slug`, `code` if the named field isn't found.
+Given a real model instance (e.g. a `Book` object), extracts the value for a named path parameter using exact field or `lookup_map` matching (`pk`, `id`, or explicit field name).
 
 **`resolve_params_for_route(route, explicit_params, auto_generate_if_missing, lookup_map)`**
 The core resolution pipeline:
 1. Start with any explicitly provided params.
-2. If params are still missing and the route has a `target_model`, look for an existing DB record (`model_class.objects.first()`), or create one with `baker.make()`.
+2. If params are still missing and the route has a `target_model`, look for an existing DB record (`model_class.objects.first()`), or create one with `ModelBakeryGenerator.generate()`.
 3. Extract param values from the found/created instance.
-4. For any param still missing: use `generate_synthetic_fallback()`.
+4. Any parameters remaining unresolved are returned as missing — no synthetic dummy values (`1`, `"test-slug"`) are guessed.
 
 Returns `(resolved_params_dict, created_instance_or_None)`.
 
@@ -391,6 +385,21 @@ Turns a route + resolved params into a real URL string:
 **`build_executable_url(route, explicit_params, auto_generate_if_missing, lookup_map)`**
 The top-level public entry point. Calls `resolve_params_for_route()` then `render_concrete_url()`.
 Returns `(concrete_url, params, created_instance)`.
+
+---
+
+### `dqs/adapters/drf/body_inferrer.py`
+
+**Purpose:** Inspects DRF view classes, `serializer_class` definitions, or Django `form_class` definitions to infer and generate realistic mock request body payload dictionaries for `POST`, `PUT`, and `PATCH` endpoints when `data=None` is passed.
+
+#### `infer_request_body(view_func_or_cls) -> Optional[Dict[str, Any]]`
+Main entry point. Inspects a view callable or view class, extracts its serializer or form class, and returns an inferred mock payload dictionary.
+
+#### `infer_body_from_serializer(serializer_cls) -> Dict[str, Any]`
+Instantiates a DRF serializer class and inspects non-read-only fields to construct a mock JSON payload matching expected data types (`CharField`, `EmailField`, `SlugField`, `IntegerField`, `DateTimeField`, `ChoiceField`, `PrimaryKeyRelatedField`, `NestedSerializer`, etc.).
+
+#### `infer_body_from_form(form_cls) -> Dict[str, Any]`
+Instantiates a Django Form class and inspects active fields to generate a mock payload dictionary.
 
 ---
 
