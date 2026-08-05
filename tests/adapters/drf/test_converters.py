@@ -1,6 +1,6 @@
 """
 tests/adapters/drf/test_converters.py
-=======================================
+======================================
 Unit tests for PathConverterResolver — the canonical path resolution engine.
 Marker: `django` + `drf` (requires Django settings, no DB writes needed).
 """
@@ -38,29 +38,6 @@ def test_resolve_unknown_converter_returns_input():
 
 
 # ---------------------------------------------------------------------------
-# generate_synthetic_fallback
-# ---------------------------------------------------------------------------
-
-@pytest.mark.parametrize("converter,expected", [
-    ("int",    1),
-    ("integer", 1),
-    ("uuid",   "123e4567-e89b-12d3-a456-426614174000"),
-    ("slug",   "test-slug"),
-    ("str",    "test-param"),
-    ("path",   "test-param"),
-])
-def test_generate_synthetic_fallback(converter, expected):
-    result = PathConverterResolver.generate_synthetic_fallback("param", converter)
-    assert result == expected
-
-
-def test_generate_synthetic_fallback_slug_in_name():
-    """With converter='str' but param name containing 'slug', result should be 'test-slug'."""
-    result = PathConverterResolver.generate_synthetic_fallback("article_slug", "str")
-    assert result == "test-slug"
-
-
-# ---------------------------------------------------------------------------
 # extract_from_model_instance
 # ---------------------------------------------------------------------------
 
@@ -81,12 +58,15 @@ def test_extract_via_lookup_map():
     assert result == "django-guide"
 
 
-def test_extract_falls_back_to_pk_if_attr_missing():
-    """When attribute doesn't exist, should fall back to pk."""
-    instance = MagicMock(spec=["pk"])
-    instance.pk = 7
-    result = PathConverterResolver.extract_from_model_instance(instance, "nonexistent_field")
-    assert result == 7
+def test_extract_nested_relational_attribute():
+    """Extract parent FK id via relational tree traversal."""
+    parent = MagicMock()
+    parent.pk = 99
+    instance = MagicMock()
+    instance.organization = parent
+    
+    result = PathConverterResolver.extract_from_model_instance(instance, "org_id")
+    assert result == 99
 
 
 # ---------------------------------------------------------------------------
@@ -95,35 +75,30 @@ def test_extract_falls_back_to_pk_if_attr_missing():
 
 def test_render_concrete_url_via_reverse(settings):
     """render_concrete_url should produce a resolvable URL via Django's reverse."""
-    # Use a known URL name from the demo app
     route = make_route(path="/books-cbv/<int:pk>/", view_name="book-detail-cbv")
     url = PathConverterResolver.render_concrete_url(route, {"pk": 1})
-    assert "/books-cbv/1/" in url
+    assert url == "/books-cbv/1/"
 
 
-def test_render_concrete_url_path_substitution_fallback():
-    """When reverse() fails, fallback substitution must replace <int:pk> correctly."""
-    route = make_route(path="/books/<int:pk>/", view_name="nonexistent-view-name")
-    url = PathConverterResolver.render_concrete_url(route, {"pk": 99})
-    assert url == "/books/99/"
-
-
-def test_render_concrete_url_slug_substitution():
-    route = make_route(path="/articles/<slug:article_slug>/", view_name="nonexistent")
-    url = PathConverterResolver.render_concrete_url(route, {"article_slug": "my-article"})
-    assert url == "/articles/my-article/"
+def test_render_concrete_url_via_path_substitution():
+    """When view_name fails, should substitute <int:pk> in path directly."""
+    route = make_route(path="/api/items/<int:pk>/", view_name="nonexistent_view_xyz")
+    url = PathConverterResolver.render_concrete_url(route, {"pk": 42})
+    assert url == "/api/items/42/"
 
 
 # ---------------------------------------------------------------------------
-# resolve_params_for_route (no model, synthetic only)
+# resolve_params_for_route without synthetic fallbacks
 # ---------------------------------------------------------------------------
 
-def test_resolve_params_synthetic_when_no_model():
-    """Without a target_model, all params should be filled by synthetic fallback."""
+def test_resolve_params_unresolved_returns_empty():
+    """Routes with missing path params and no model return unresolved params dictionary."""
     route = make_route(
-        path="/items/<int:pk>/",
-        path_params=[PathParam(name="pk", converter="int")],
+        path="/api/custom/<int:custom_id>/",
+        path_params=[PathParam(name="custom_id", converter="int")],
     )
-    resolved, created = PathConverterResolver.resolve_params_for_route(route)
-    assert resolved["pk"] == 1
+    resolved, created = PathConverterResolver.resolve_params_for_route(
+        route, auto_generate_if_missing=False
+    )
+    assert "custom_id" not in resolved
     assert created is None

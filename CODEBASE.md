@@ -365,24 +365,15 @@ Normalizes a Django converter class name string to a simple type.
 **`extract_converters_from_pattern(pattern) -> List[PathParam]`**
 Reads `RoutePattern.converters` (the dict Django builds from `<int:pk>` in a path string) and returns a list of `PathParam` objects.
 
-**`generate_synthetic_fallback(param_name, converter_type) -> Any`**
-When no database record exists to get a real value from, returns a deterministic fake value:
-| Converter type | Returns |
-|---|---|
-| `int` | `1` |
-| `uuid` | `"123e4567-e89b-12d3-a456-426614174000"` |
-| `slug` | `"test-slug"` |
-| `str` / `path` | `"test-param"` (or `"test-slug"` if param name contains `"slug"`) |
-
 **`extract_from_model_instance(instance, param_name, lookup_map) -> Any`**
-Given a real model instance (e.g. a `Book` object), extracts the value for a named path parameter. Uses `lookup_map` to translate URL kwarg names to model field names. Falls back through `pk`, `id`, `slug`, `code` if the named field isn't found.
+Given a real model instance (e.g. a `Book` object), extracts the value for a named path parameter using exact field or `lookup_map` matching (`pk`, `id`, or explicit field name).
 
 **`resolve_params_for_route(route, explicit_params, auto_generate_if_missing, lookup_map)`**
 The core resolution pipeline:
 1. Start with any explicitly provided params.
-2. If params are still missing and the route has a `target_model`, look for an existing DB record (`model_class.objects.first()`), or create one with `baker.make()`.
+2. If params are still missing and the route has a `target_model`, look for an existing DB record (`model_class.objects.first()`), or create one with `ModelBakeryGenerator.generate()`.
 3. Extract param values from the found/created instance.
-4. For any param still missing: use `generate_synthetic_fallback()`.
+4. Any parameters remaining unresolved are returned as missing — no synthetic dummy values (`1`, `"test-slug"`) are guessed.
 
 Returns `(resolved_params_dict, created_instance_or_None)`.
 

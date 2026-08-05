@@ -1,22 +1,20 @@
 """
 Path Converter Engine & Dynamic Parameter Resolver
 ==================================================
-Resolves parameterized Django URL routes (such as `/books/<int:pk>/` or `/users/<uuid:id>/`)
+Resolves parameterized Django URL routes (such as `/books/<int:pk>/` or `/orgs/<int:org_id>/projects/<int:proj_id>/`)
 by identifying required path parameters, fetching or generating concrete model instances
-inside safe savepoints, and constructing executable URL paths. Handles custom converters,
-lookup_url_kwarg mappings, synthetic fallbacks, and regex patterns gracefully.
+inside safe savepoints, traversing relational trees, and constructing executable URL paths.
+No synthetic dummy fallbacks (e.g. `1` or `"test-slug"`) are used — unresolved parameters are handed off to the agent/user.
 """
 
 import logging
 import re
-import uuid
 from typing import Any, Dict, List, Optional, Tuple, Type
 
 from django.apps import apps
 from django.db import models
 from django.urls import URLPattern, reverse
 from django.urls.resolvers import RoutePattern
-from model_bakery import baker
 
 from dqs.adapters.drf.introspector import PathParam, RouteMetadata
 
@@ -32,7 +30,7 @@ class PathConverterResolver:
     def resolve_converter_type(cls, converter_name: str) -> str:
         """
         Normalizes a Django converter class name to a simple type string.
-        e.g. 'intconverter' -> 'int', 'slgconverter' -> 'slug', '' -> 'str'
+        e.g. 'intconverter' -> 'int', 'slugconverter' -> 'slug', '' -> 'str'
         """
         return converter_name or "str"
 
@@ -52,37 +50,19 @@ class PathConverterResolver:
         return params
 
     @classmethod
-    def generate_synthetic_fallback(cls, param_name: str, converter_type: str) -> Any:
-        """
-        Entry C: Produces deterministic fallback values when no model/DB record exists.
-        """
-        conv = (converter_type or "").lower()
-        if conv in ("int", "integer", "autofield"):
-            return 1
-        elif conv in ("uuid", "guid"):
-            return "123e4567-e89b-12d3-a456-426614174000"
-        elif conv == "slug":
-            return "test-slug"
-        elif conv in ("str", "string", "path"):
-            # Secondary hint: if the param name itself contains 'slug', produce a slug value
-            if "slug" in param_name:
-                return "test-slug"
-            return "test-param"
-        return "1"
-
-    @classmethod
     def extract_from_model_instance(
         cls,
         instance: models.Model,
         param_name: str,
         lookup_map: Optional[Dict[str, str]] = None,
-    ) -> Any:
+    ) -> Optional[Any]:
         """
-        Entry B: Extracts parameter value from a model instance, mapping lookup_url_kwarg to lookup_field.
+        Extracts parameter value from a model instance using exact field/lookup mapping.
+        No fuzzy reflection guessing, missing parameters are handed over to caller.
         """
         lookup_map = lookup_map or {}
         model_field_name = lookup_map.get(param_name, param_name)
-
+        # If the resolved field name is "pk" or "id", it directly returns Django's built-in primary key
         if model_field_name in ("pk", "id"):
             return instance.pk
 
@@ -90,13 +70,7 @@ class PathConverterResolver:
             val = getattr(instance, model_field_name)
             return val() if callable(val) else val
 
-        # Attribute fallback matching (e.g., category_code -> category_id / code)
-        for attr in (param_name, "pk", "id", "slug", "code"):
-            if hasattr(instance, attr):
-                val = getattr(instance, attr)
-                return val() if callable(val) else val
-
-        return instance.pk
+        return None
 
     @classmethod
     def resolve_params_for_route(
@@ -107,12 +81,13 @@ class PathConverterResolver:
         lookup_map: Optional[Dict[str, str]] = None,
     ) -> Tuple[Dict[str, Any], Optional[Any]]:
         """
-        Resolves concrete values for all required path parameters of a route.
+        Resolves concrete values for required path parameters of a route.
         Returns a tuple of (resolved_path_params_dict, created_mock_instance_or_none).
+        Unresolved parameters are NOT given dummy synthetic fallbacks.
         """
         resolved: Dict[str, Any] = dict(explicit_params or {})
 
-        if not route.has_path_params:
+        if not route.has_path_params: 
             return resolved, None
 
         missing_params = [p for p in route.path_params if p.name not in resolved]
@@ -144,15 +119,13 @@ class PathConverterResolver:
 
                 if instance is not None:
                     for p in missing_params:
-                        resolved[p.name] = cls.extract_from_model_instance(instance, p.name, lookup_map)
+                        val = cls.extract_from_model_instance(instance, p.name, lookup_map)
+                        if val is not None:
+                            resolved[p.name] = val
             except Exception as e:
                 logger.warning(f"Model resolution failed for route {route.path}: {e}")
 
-        # 2. Synthetic fallback for any parameters that remain unresolved (e.g. plain APIView, baker failure)
-        for p in missing_params:
-            if p.name not in resolved:
-                resolved[p.name] = cls.generate_synthetic_fallback(p.name, p.converter)
-
+        # Note: Any parameter remaining in missing_params and not in resolved is left for handoff.
         return resolved, created_instance
 
     @classmethod
@@ -162,7 +135,8 @@ class PathConverterResolver:
         resolved_params: Dict[str, Any],
     ) -> str:
         """
-        Entry D: Renders a final executable URL string via Django reverse() or path substitution.
+        Renders a final executable URL string via Django reverse() or path substitution.
+        converts /api/posts/<int:post_id>/comments/<slug:comment_slug>/ ----> /api/posts/42/comments/hello-world/
         """
         if route.view_name:
             try:
@@ -170,7 +144,7 @@ class PathConverterResolver:
             except Exception:
                 pass
 
-        # Modern path converter substitution fallback (<int:pk> or <slug:article_slug>)
+        # Path converter substitution fallback (<int:pk> or <slug:article_slug>)
         url = route.path
         for name, value in resolved_params.items():
             str_val = str(value)

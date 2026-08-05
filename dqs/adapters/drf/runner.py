@@ -102,6 +102,7 @@ class ExecutionResult:
     side_effect_warnings: List[str] = field(default_factory=list)
     response_body: Optional[Any] = None
     seeded_records: List[Dict[str, Any]] = field(default_factory=list)
+    request_spec: Optional[Dict[str, Any]] = None
 
 class DjangoSandboxRunner:
     """
@@ -293,10 +294,38 @@ class DjangoSandboxRunner:
             auto_generate_if_missing=True,
         )
 
+        request_spec = self.build_request_spec(
+            url_name_or_path=url_name_or_path,
+            method=method,
+            resolved_path=resolved_path,
+            route_meta=route_meta,
+            resolved_params=resolved_params,
+            query_params=query_params,
+            data=data,
+        )
+
+        # Handover Rule: If any path parameter remains unresolved, do NOT send a dummy request or fail with 404. Hand off directly to agent/user!
+        unresolved_names = [p["name"] for p in request_spec["path_params"] if p["status"] == "UNRESOLVED"]
+        if unresolved_names:
+            return ExecutionResult(
+                route=url_name_or_path,
+                status_code=400,
+                error=(
+                    f"Unresolved path parameter(s): {', '.join(unresolved_names)}. "
+                    f"Please provide explicit values in 'path_params' or seed the target model '{target_model}'."
+                ),
+                request_spec=request_spec,
+            )
+
         try:
             resolved_match = resolve(resolved_path)
         except Exception as e:
-            return ExecutionResult(route=resolved_path, status_code=404, error=f"Route resolution failed: {str(e)}")
+            return ExecutionResult(
+                route=resolved_path,
+                status_code=404,
+                error=f"Route resolution failed: {str(e)}",
+                request_spec=request_spec,
+            )
 
         request_func = getattr(self.factory, method.lower(), None)
         if not request_func:
@@ -543,3 +572,36 @@ class DjangoSandboxRunner:
             pass
             
         return list(set(warnings))
+
+    def build_request_spec(
+        self,
+        url_name_or_path: str,
+        method: str,
+        resolved_path: str,
+        route_meta: Any,
+        resolved_params: Dict[str, Any],
+        query_params: Optional[Dict[str, Any]] = None,
+        data: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Constructs a structured Postman-style Request Spec contract for callers
+        (Web UI, CLI, or MCP Coding Agent).
+        """
+        path_params_spec = []
+        for p in getattr(route_meta, "path_params", []):
+            is_resolved = p.name in resolved_params
+            path_params_spec.append({
+                "name": p.name,
+                "converter": p.converter,
+                "status": "RESOLVED" if is_resolved else "UNRESOLVED",
+                "value": resolved_params.get(p.name),
+            })
+
+        return {
+            "route": url_name_or_path,
+            "method": method.upper(),
+            "resolved_url": resolved_path,
+            "path_params": path_params_spec,
+            "query_params": query_params or {},
+            "body": data,
+        }
