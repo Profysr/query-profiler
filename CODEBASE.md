@@ -57,7 +57,9 @@ django-profiler/
 │           ├── apps.py           ← Django AppConfig (startup safety check)
 │           ├── discovery.py      ← Finds all routes, signals, tasks in the project
 │           ├── introspector.py   ← Reads URL tree; extracts route metadata
+│           ├── body_inferrer.py  ← Request body payload inferrer for DRF serializers / forms
 │           ├── converters.py     ← Resolves URL path parameters to real values
+│           ├── mock_generator.py ← Model mock data generator with validation recovery & uniqueness guards
 │           ├── query_interceptor.py ← Hooks into Django DB driver to capture queries
 │           ├── runner.py         ← Executes sandboxed requests; orchestrates everything
 │           └── schema_advisor.py ← Checks DB schema for missing indexes / PK strategy
@@ -71,6 +73,7 @@ django-profiler/
 │   └── adapters/
 │       └── drf/
 │           ├── conftest.py       ← DRF-specific fixtures (fake Django app, models, views)
+│           ├── test_body_inferrer.py
 │           ├── test_converters.py
 │           ├── test_discovery.py
 │           ├── test_introspector.py
@@ -391,6 +394,21 @@ Turns a route + resolved params into a real URL string:
 **`build_executable_url(route, explicit_params, auto_generate_if_missing, lookup_map)`**
 The top-level public entry point. Calls `resolve_params_for_route()` then `render_concrete_url()`.
 Returns `(concrete_url, params, created_instance)`.
+
+---
+
+### `dqs/adapters/drf/body_inferrer.py`
+
+**Purpose:** Inspects DRF view classes, `serializer_class` definitions, or Django `form_class` definitions to infer and generate realistic mock request body payload dictionaries for `POST`, `PUT`, and `PATCH` endpoints when `data=None` is passed.
+
+#### `infer_request_body(view_func_or_cls) -> Optional[Dict[str, Any]]`
+Main entry point. Inspects a view callable or view class, extracts its serializer or form class, and returns an inferred mock payload dictionary.
+
+#### `infer_body_from_serializer(serializer_cls) -> Dict[str, Any]`
+Instantiates a DRF serializer class and inspects non-read-only fields to construct a mock JSON payload matching expected data types (`CharField`, `EmailField`, `SlugField`, `IntegerField`, `DateTimeField`, `ChoiceField`, `PrimaryKeyRelatedField`, `NestedSerializer`, etc.).
+
+#### `infer_body_from_form(form_cls) -> Dict[str, Any]`
+Instantiates a Django Form class and inspects active fields to generate a mock payload dictionary.
 
 ---
 

@@ -145,3 +145,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Verified (no changes needed)
 
 - **AST Normalization logic (`analyzer.py`)**: Confirmed that the core AST normalizer logic required zero modifications to support the new interceptor mechanism. SQL fingerprints and N+1 aggregations generate exactly as they did under the old boundary limits.
+
+---
+
+## [0.3.0] - Dynamic Path Converter Engine, Mock Data Generator & Request-Body Inference
+
+### Added
+
+- **Dynamic Path Converter Engine (`dqs/adapters/drf/converters.py`)**:
+  - `PathConverterResolver`: Modular parameter resolution pipeline handling standard and custom Django path converters (`int`, `slug`, `uuid`, `str`, `path`).
+  - Extract path parameters directly from Django `RoutePattern` instances.
+  - Automatically fetch or seed target model instances via `model_bakery` to extract real database primary keys/slugs/codes for parameterized URL paths (e.g., `/books/<int:pk>/`).
+  - Fallback to deterministic synthetic parameter values (`int` -> `1`, `uuid` -> `"123e4567-e89b-12d3-a456-426614174000"`, `slug` -> `"test-slug"`) when DB records are unavailable.
+  - Render concrete executable URLs using Django `reverse()` with regex substitution fallbacks.
+
+- **Schema & PK Strategy Advisor (`dqs/adapters/drf/schema_advisor.py`)**:
+  - `check_pk_strategy()`: Inspects model metadata and flags auto-increment integer PKs (`AutoField`, `BigAutoField`), recommending UUIDv7 for write-heavy or distributed workloads.
+  - `check_missing_indexes()`: Cross-references fields queried in `.filter()`, `.exclude()`, or `.order_by()` against model index metadata (`db_index`, `unique`, `Meta.indexes`) to flag missing index bottlenecks.
+
+- **Signal, Celery & Consumer Discovery Updates (`dqs/adapters/drf/discovery.py`)**:
+  - Integrated schema-level advisor checks (`check_pk_strategy` and `check_missing_indexes`) into URL view target discovery.
+  - Added Celery background task discovery scanning `celery.current_app.tasks`.
+  - Added Django Channels ASGI route discovery for WebSocket consumers (`Target(kind="consumer", triggerable=False)`).
+
+- **Mock Data Generator Engine (`dqs/adapters/drf/mock_generator.py`)**:
+  - `ModelBakeryGenerator`: Encapsulates model mock data creation with constraint-safety, uniqueness guards (`unique=True`, `unique_together`, `UniqueConstraint`), and sequence generators.
+  - **Validation Recovery Flow**: Gracefully recovers from `baker` failures via optional field filling, parent relation auto-seeding, and direct fallback model instantiation.
+  - **In-Memory Sample Cache**: Caches generated model instances per session/run to prevent redundant database operations.
+
+- **Request Body Inferrer (`dqs/adapters/drf/body_inferrer.py`)**:
+  - `infer_request_body()`: Automatically inspects DRF view classes, `serializer_class` definitions (or `get_serializer_class()`), and Django `form_class` definitions to produce valid mock JSON payloads for `POST`, `PUT`, and `PATCH` endpoints when `data=None`.
+  - Maps serializer field types (`CharField`, `EmailField`, `SlugField`, `IntegerField`, `DecimalField`, `DateTimeField`, `ChoiceField`, `PrimaryKeyRelatedField`, `NestedSerializer`, `JSONField`) to realistic mock values.
+  - Automatically integrated into `DjangoSandboxRunner.execute_isolated()`.
