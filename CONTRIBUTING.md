@@ -39,13 +39,13 @@ You don't have to write code to contribute meaningfully:
 
 2. **Clone** your fork locally:
    ```bash
-   git clone https://github.com/YOUR-USERNAME/django-query-sandbox.git
-   cd django-query-sandbox
+   git clone https://github.com/YOUR-USERNAME/django-profiler.git
+   cd django-profiler
    ```
 
 3. **Add the original repo as upstream** (so you can pull in future updates):
    ```bash
-   git remote add upstream https://github.com/Profysr/django-query-sandbox.git
+   git remote add upstream https://github.com/Profysr/query-profiler.git
    ```
 
 4. **Set up the project** — follow the [Quickstart](./README.md#quickstart-development-environment) section in the README. Docker is the *only* supported path — no local Python install is required or expected.
@@ -56,7 +56,6 @@ You don't have to write code to contribute meaningfully:
    docker compose up -d
    docker compose exec web python manage.py migrate
    ```
-   Confirm the dashboard loads at `http://localhost:8000/dqs/`.
 
 ## Branching & Commit Conventions
 

@@ -5,8 +5,6 @@ All notable changes to the **Da Profiler** project will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
----
-
 ## [0.1.0] - 2026-06-25
 
 ### Added
@@ -148,7 +146,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.3.0] - Dynamic Path Converter Engine, Mock Data Generator & Request-Body Inference
+## [0.3.0] - Dynamic Path Converter Engine, Mock Data Generator & Request-Body Inference - 2026-07-14
 
 ### Added
 
@@ -176,4 +174,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Request Body Inferrer (`dqs/adapters/drf/body_inferrer.py`)**:
   - `infer_request_body()`: Automatically inspects DRF view classes, `serializer_class` definitions (or `get_serializer_class()`), and Django `form_class` definitions to produce valid mock JSON payloads for `POST`, `PUT`, and `PATCH` endpoints when `data=None`.
   - Maps serializer field types (`CharField`, `EmailField`, `SlugField`, `IntegerField`, `DecimalField`, `DateTimeField`, `ChoiceField`, `PrimaryKeyRelatedField`, `NestedSerializer`, `JSONField`) to realistic mock values.
-  - Automatically integrated into `DjangoSandboxRunner.execute_isolated()`.
+  - Automatically integrated into `DjangoSandboxRunner.execute_isolated()`.
+
+---
+
+## [0.3.1] - 2026-07-16
+
+### Fixed
+
+- **Dynamic Path Converter Engine (`dqs/adapters/drf/converters.py`)**:
+  - `PathConverterResolver`: Extracts URL path parameters and matches standard/custom converters (`int`, `slug`, `uuid`, `str`, `path`).
+  - Resolves concrete parameters automatically by inspecting target models or generating mock entities via `model_bakery`.
+  - Reverses parameters into valid executable URL paths for parameterized endpoints (e.g. `/api/v1/books/42/`).
+
+- **Mock Data Generator Engine (`dqs/adapters/drf/mock_generator.py`)**:
+  - `ModelBakeryGenerator`: Provides constraint-safe mock entity generation respecting `unique`, `unique_together`, and foreign key relations.
+  - Features validation error recovery and an in-memory sample cache to minimize DB overhead.
+
+- **Request Body Inferrer (`dqs/adapters/drf/body_inferrer.py`)**:
+  - `infer_request_body()`: Automatically infers mock JSON payloads for `POST`, `PUT`, and `PATCH` requests by analyzing DRF serializer classes (`serializer_class`, `get_serializer_class()`) and Django form fields.
+
+- **Schema & PK Strategy Advisor (`dqs/adapters/drf/schema_advisor.py`)**:
+  - `check_pk_strategy()`: Recommends UUIDv7 over auto-increment integer PKs on high-concurrency models.
+  - `check_missing_indexes()`: Flags fields used in `.filter()`, `.exclude()`, or `.order_by()` that lack database indexes (`db_index`, `Meta.indexes`).
+
+- **Unified Target Discovery (`dqs/adapters/drf/discovery.py`)**:
+  - Expanded discovery pipeline to cover URL views, signals, Celery tasks, and Channels ASGI consumers into unified `Target` records.
+
+---

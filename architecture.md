@@ -13,7 +13,7 @@ Da Profiler is built around three fundamental design principles:
    - Handles SQL AST fingerprinting (`sqlglot`), N+1 aggregation algorithms, target abstractions (`Target`), and framework-independent static AST code scanning (`StaticASTAdvisor`).
 2. **Framework Adapters (`dqs/adapters/`)**:
    - Framework-specific integration logic lives strictly inside adapters (e.g. `dqs/adapters/drf/`).
-   - Adapters handle route discovery, ORM query interception, dynamic parameter resolution, and safe isolated execution.
+   - Adapters handle route discovery, ORM query interception, dynamic parameter resolution, synthetic mock data generation, body inference, and safe isolated execution.
 3. **Zero Database Risk (Isolated Savepoints)**:
    - Profiled endpoints run strictly within `transaction.atomic()` savepoints.
    - All state changes (create, update, delete) are automatically rolled back when profiling finishes. The real database is never modified.
@@ -44,6 +44,12 @@ Da Profiler is built around three fundamental design principles:
 |  +--------------------+    +---------------------------+    +------------------+  |
 |  |  Target Discovery  |    |    DB Query Interceptor   |    | Sandbox Runner   |  |
 |  |   (discovery.py)   |    |   (query_interceptor.py)  |    |   (runner.py)    |  |
+|  +---------+----------+    +-------------+-------------+    +--------+---------+  |
+|            |                             |                           |            |
+|            v                             v                           v            |
+|  +--------------------+    +---------------------------+    +------------------+  |
+|  | Route Introspect   |    |  Dynamic Path Converters  |    |  Mock Generator  |  |
+|  | (introspector.py)  |    |      (converters.py)      |    |(mock_generator.py)|
 |  +--------------------+    +---------------------------+    +------------------+  |
 +-----------------------------------------------------------------------------------+
 ```
@@ -73,7 +79,8 @@ Da Profiler is built around three fundamental design principles:
 ### B. Django Adapter (`dqs/adapters/drf/`)
 
 #### 1. `discovery.py` (Target Discovery Engine)
-- Discovers URL endpoints (`DjangoIntrospector`), Django signals (`post_save`, `pre_save`, `post_delete`), and Celery tasks.
+- Discovers URL endpoints (`DjangoIntrospector`), Django signals (`post_save`, `pre_save`, `post_delete`), Celery tasks, and Channels ASGI consumers.
+- Integrates static schema advisor checks (`schema_advisor.py`) for PK strategies and missing index detection.
 - Populates `Target` instances and passes callables through `StaticASTAdvisor`.
 
 #### 2. `introspector.py` (Route & URL Introspector)
@@ -85,8 +92,16 @@ Da Profiler is built around three fundamental design principles:
 - Context manager hooking into Django's `connection.execute_wrapper()`.
 - Captures SQL, execution duration, and walks `inspect.stack()` to attribute each query to exact user code line numbers.
 
-#### 4. `runner.py` (Sandbox Execution Engine)
-- **`profile_callable()`**: Runs callables inside a `transaction.atomic()` savepoint with the `QueryInterceptor` active. Ensures mock data seeding happens in a pre-profiling setup phase so seeding queries do not pollute query counts.
+#### 4. `converters.py` (Dynamic Path Converter Resolver)
+- Extracts URL path converters (`int`, `slug`, `uuid`, `str`, `path`).
+- Uses model lookup or `model_bakery` mock seeding to supply concrete values for parameterized endpoints.
+
+#### 5. `mock_generator.py` & `body_inferrer.py` (Mock Data & Request Payload Engine)
+- `model_bakery` wrapper with constraint safety for relationship seeding.
+- Automatically infers DRF serializer and Django form payloads for `POST`/`PUT`/`PATCH` profiling.
+
+#### 6. `runner.py` (Sandbox Execution Engine)
+- **`profile_callable()`**: Runs callables inside a `transaction.atomic()` savepoint with the `QueryInterceptor` active. Executes setup callables (such as mock data seeding) inside the rollback boundary prior to query interception to keep query counts clean.
 - **`execute_isolated()`**: Simulates HTTP requests via `RequestFactory` and rolls back all database mutations.
 
 ---
@@ -99,6 +114,7 @@ sequenceDiagram
     participant Dev as Developer / AI Agent
     participant Disc as Target Discovery Engine
     participant Adv as Static AST Advisor
+    participant Conv as Converter & Body Inferrer
     participant Run as Sandbox Runner
     participant DB as Query Interceptor & DB
     participant Ana as AST Analyzer
@@ -108,9 +124,12 @@ sequenceDiagram
     Adv-->>Disc: Return static findings (e.g. ORM call in loop)
     Disc-->>Dev: List of Target objects
 
+    Dev->>Conv: Resolve path params & infer request body
+    Conv-->>Dev: Concrete executable URL & mock JSON payload
+
     Dev->>Run: execute_isolated(target_id)
     Run->>DB: Open transaction.atomic() savepoint
-    Run->>Run: Setup phase (Seed mock data if needed)
+    Run->>Run: Setup phase (Seed mock data in pre-interception boundary)
     Run->>DB: Attach QueryInterceptor to DB driver connection
     Run->>Run: Dispatch RequestFactory HTTP request to endpoint view
     DB-->>Run: Record queries, execution times, and call stack origins
@@ -141,9 +160,13 @@ dqs/
 └── adapters/
     └── drf/                    # Django & DRF adapter
         ├── apps.py             # DQS Django AppConfig
-        ├── discovery.py        # Views, signals, and tasks discovery
+        ├── body_inferrer.py    # Automatic request payload inference for POST/PUT
+        ├── converters.py       # Dynamic path converter & parameter resolution
+        ├── discovery.py        # Views, signals, tasks, and consumer discovery
         ├── introspector.py     # URL route pattern tree walker
+        ├── mock_generator.py   # model_bakery wrapper & validation recovery
         ├── query_interceptor.py# DB connection.execute_wrapper hook
         ├── runner.py           # Savepoint execution & callable profiling
-        └── schema_advisor.py   # Database schema recommendations
+        └── schema_advisor.py   # Database schema & PK strategy recommendations
 ```
+
