@@ -131,13 +131,15 @@ class PathConverterResolver:
                 # Try finding an existing row in DB
                 instance = model_class.objects.first()
 
-                # If no row exists, safely attempt mock row creation via baker
+                # If no row exists, safely attempt mock row creation via ModelBakeryGenerator
                 if instance is None:
                     try:
-                        instance = baker.make(model_class)
+                        from dqs.adapters.drf.mock_generator import ModelBakeryGenerator
+                        generated = ModelBakeryGenerator.generate(model_class, quantity=1, commit=True)
+                        instance = generated[0] if generated else None
                         created_instance = instance
                     except Exception as seed_err:
-                        logger.warning(f"baker.make failed for model {route.target_model}: {seed_err}")
+                        logger.warning(f"ModelBakeryGenerator.generate failed for model {route.target_model}: {seed_err}")
                         instance = None
 
                 if instance is not None:

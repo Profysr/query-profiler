@@ -88,6 +88,8 @@ from dqs.adapters.drf.introspector import RouteMetadata
 from django.db.models.signals import post_save, pre_save, post_delete, pre_delete
 from dqs.core.targets import Target
 from dqs.core.static_advisor import StaticASTAdvisor
+from dqs.adapters.drf.body_inferrer import infer_request_body
+
 
 @dataclass
 class ExecutionResult:
@@ -214,14 +216,11 @@ class DjangoSandboxRunner:
         seed_count: int = 1,
     ) -> Dict[str, Any]:
         """
-        Pipeline Entry 3: Seeds mock resources using baker inside safe transaction boundaries.
+        Pipeline Entry 3: Seeds mock resources using ModelBakeryGenerator inside safe transaction boundaries.
         """
         try:
-            app_label, model_name = target_model.split(".")
-            model_class = apps.get_model(app_label, model_name)
-            instances = baker.make(model_class, _quantity=seed_count)
-            if not isinstance(instances, list):
-                instances = [instances]
+            from dqs.adapters.drf.mock_generator import ModelBakeryGenerator
+            instances = ModelBakeryGenerator.generate(target_model, quantity=seed_count, commit=True)
             return {
                 "status_code": 201,
                 "seeded": True,
@@ -312,21 +311,21 @@ class DjangoSandboxRunner:
             def _seed():
                 seeded_info = []
                 if seed_count > 0 and target_model:
-                    model_class = apps.get_model(target_model)
-                    created_instances = baker.make(model_class, _quantity=seed_count)
-
-                    if not isinstance(created_instances, list):
-                        created_instances = [created_instances]
-
+                    from dqs.adapters.drf.mock_generator import ModelBakeryGenerator
+                    created_instances = ModelBakeryGenerator.generate(target_model, quantity=seed_count, commit=True)
                     seeded_info = [{"pk": obj.pk, "__str__": str(obj)} for obj in created_instances]
                 return seeded_info
 
             # Only request construction + view execution runs inside the interceptor.
             def _sandbox_execution():
-                if method in {"POST", "PUT", "PATCH"} and data is not None:
-                    request = request_func(resolved_path, data=json.dumps(data), content_type=content_type)
+                request_data = data
+                if method in {"POST", "PUT", "PATCH"} and request_data is None:
+                    request_data = infer_request_body(resolved_match.func)
+
+                if method in {"POST", "PUT", "PATCH"} and request_data is not None:
+                    request = request_func(resolved_path, data=json.dumps(request_data), content_type=content_type)
                 else:
-                    request = request_func(resolved_path, data=query_params if method == "GET" else (data or {}))
+                    request = request_func(resolved_path, data=query_params if method == "GET" else (request_data or {}))
 
                 request.user = user if user is not None else AnonymousUser()
                 request.resolver_match = resolved_match
