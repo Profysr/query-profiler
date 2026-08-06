@@ -18,7 +18,7 @@ from django.urls import path
 
 from dqs.adapters.drf.views import DQSDashboardView, DQSProfileView
 
-app_name = "dqs"
+app_name = "drf"
 
 urlpatterns = [
     path("", DQSDashboardView.as_view(), name="dashboard"),
