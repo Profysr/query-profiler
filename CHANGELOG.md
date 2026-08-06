@@ -202,3 +202,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Expanded discovery pipeline to cover URL views, signals, Celery tasks, and Channels ASGI consumers into unified `Target` records.
 
 ---
+
+## [0.3.2] - 2026-07-20
+
+### Added
+- Search focus hotkey (`/`) to quickly focus the route search bar.
+- Interactive loading state animations on the **Profile Route** action button.
+- Accessible state management with dynamic `aria-pressed` and `aria-selected` attributes.
+- Created `dashboard.html` for dashboard with dark-theme styling and improved tokenized JSON highlighting.
+
+### Fixed
+- Fixed raw SQL formatting and string escaping errors in ORM suggestion logic.
+- Prevented `SyntaxError` crashes when processing queries containing single or double quotes.
+
+### Security
+- Completely removed inline script handlers (`onclick`, `oninput`, `javascript:`) for strict Content Security Policy (CSP) compliance.
+- Refactored UI events to use top-level event delegation inside `DOMContentLoaded`.
+---

@@ -1,0 +1,1037 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="{{ csrf_token }}">
+    <title>Da Profiler | Django Query Sandbox</title>
+    <style>
+        :root {
+            --bg-base: #0f1117;
+            --bg-surface: #161b22;
+            --bg-hover: #21262d;
+            --border: #30363d;
+            --text-main: #e6edf3;
+            --text-muted: #8b949e;
+            --primary: #2f81f7;
+            --primary-hover: #1f6feb;
+            --green: #238636;
+            --red: #f85149;
+            --orange: #d29922;
+            --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+            --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+            
+            /* Status Colors */
+            --sc-2xx: #2ea043;
+            --sc-3xx: #d29922;
+            --sc-4xx: #f85149;
+            --sc-5xx: #ff7b72;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        
+        body {
+            font-family: var(--font-sans);
+            background-color: var(--bg-base);
+            color: var(--text-main);
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* =========================================================================
+           LAYOUT: SIDEBAR
+           ========================================================================= */
+        .sidebar {
+            width: 320px;
+            background-color: var(--bg-surface);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+        }
+
+        .sidebar-header {
+            padding: 16px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .sidebar-header h2 {
+            font-size: 16px;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .search-box {
+            width: 100%;
+            padding: 8px 12px;
+            background: var(--bg-base);
+            border: 1px solid var(--border);
+            color: var(--text-main);
+            border-radius: 6px;
+            margin-bottom: 12px;
+            font-size: 14px;
+            outline: none;
+        }
+        .search-box:focus { border-color: var(--primary); }
+
+        .filters {
+            display: flex;
+            gap: 6px;
+        }
+
+        .filter-chip {
+            background: var(--bg-base);
+            border: 1px solid var(--border);
+            color: var(--text-muted);
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .filter-chip:hover { color: var(--text-main); }
+        .filter-chip.active {
+            background: var(--primary);
+            color: white;
+            border-color: var(--primary);
+        }
+
+        .route-list-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 8px;
+        }
+
+        .route-card {
+            padding: 10px;
+            border-radius: 6px;
+            cursor: pointer;
+            margin-bottom: 4px;
+            border: 1px solid transparent;
+        }
+        .route-card:hover { background-color: var(--bg-hover); }
+        .route-card.active {
+            background-color: var(--bg-hover);
+            border-color: var(--border);
+        }
+        .route-card.not-exec { opacity: 0.5; }
+
+        .rc-path {
+            font-family: var(--font-mono);
+            font-size: 12px;
+            margin-bottom: 6px;
+            word-break: break-all;
+        }
+        
+        .rc-meta {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+            font-size: 11px;
+            flex-wrap: wrap;
+        }
+
+        /* =========================================================================
+           METHOD BADGES & TAGS
+           ========================================================================= */
+        .m-badge {
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 600;
+            font-family: var(--font-mono);
+        }
+        .m-GET { background: #1f6feb22; color: #58a6ff; }
+        .m-POST { background: #2ea04322; color: #3fb950; }
+        .m-PUT, .m-PATCH { background: #d2992222; color: #d29922; }
+        .m-DELETE { background: #f8514922; color: #f85149; }
+
+        .rc-params, .rc-model, .view-type-pill {
+            color: var(--text-muted);
+            background: var(--bg-base);
+            padding: 2px 6px;
+            border-radius: 4px;
+            border: 1px solid var(--border);
+        }
+
+        .exec-ok { color: var(--green); font-size: 11px; }
+        .exec-no { color: var(--red); font-size: 11px; }
+
+        /* =========================================================================
+           LAYOUT: MAIN CONTENT
+           ========================================================================= */
+        .main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background-color: var(--bg-base);
+        }
+
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: var(--text-muted);
+        }
+
+        .profiler-panel {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+        }
+
+        /* Top Bar */
+        .prof-header {
+            padding: 20px;
+            background-color: var(--bg-surface);
+            border-bottom: 1px solid var(--border);
+        }
+        #prof-path {
+            font-family: var(--font-mono);
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 12px;
+        }
+        #prof-meta {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+
+        /* Controls */
+        .controls-bar {
+            padding: 16px 20px;
+            display: flex;
+            gap: 16px;
+            align-items: flex-end;
+            border-bottom: 1px solid var(--border);
+            background-color: var(--bg-base);
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .control-group label {
+            font-size: 12px;
+            color: var(--text-muted);
+            font-weight: 600;
+        }
+        .control-group select, .control-group input {
+            background: var(--bg-surface);
+            border: 1px solid var(--border);
+            color: var(--text-main);
+            padding: 6px 10px;
+            border-radius: 4px;
+            font-size: 13px;
+            outline: none;
+            font-family: var(--font-mono);
+        }
+        .control-group select:focus, .control-group input:focus { border-color: var(--primary); }
+        
+        .run-btn {
+            background: var(--green);
+            color: white;
+            border: none;
+            padding: 8px 20px;
+            border-radius: 6px;
+            font-weight: 600;
+            cursor: pointer;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: background 0.2s;
+        }
+        .run-btn:hover { background: #2ea043; }
+        .run-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        
+        /* Spinner */
+        .run-btn.loading::after {
+            content: '';
+            width: 14px;
+            height: 14px;
+            border: 2px solid white;
+            border-bottom-color: transparent;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Path Params */
+        #params-inputs {
+            display: flex;
+            gap: 12px;
+        }
+
+        /* Results Area */
+        .results-area {
+            flex: 1;
+            overflow-y: auto;
+            padding: 24px;
+            background-color: var(--bg-base);
+        }
+
+        /* Metrics Grid */
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        .metric-card {
+            background: var(--bg-surface);
+            border: 1px solid var(--border);
+            padding: 16px;
+            border-radius: 8px;
+            border-top: 3px solid;
+        }
+        .mc-ok { border-top-color: var(--green); }
+        .mc-warn { border-top-color: var(--orange); }
+        .mc-danger { border-top-color: var(--red); }
+        
+        .metric-label { font-size: 12px; color: var(--text-muted); margin-bottom: 8px; }
+        .metric-value { font-size: 24px; font-weight: 600; font-family: var(--font-mono); display: flex; align-items: center; gap: 8px;}
+        .metric-sub { font-size: 12px; color: var(--text-muted); margin-top: 8px; }
+
+        .sc-pill {
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 14px;
+        }
+        .sc-2xx { background: #2ea04322; color: var(--sc-2xx); }
+        .sc-3xx { background: #d2992222; color: var(--sc-3xx); }
+        .sc-4xx { background: #f8514922; color: var(--sc-4xx); }
+        .sc-5xx { background: #ff7b7222; color: var(--sc-5xx); }
+
+        /* Alerts */
+        .alert {
+            padding: 12px 16px;
+            border-radius: 6px;
+            margin-bottom: 24px;
+            font-size: 14px;
+            border-left: 4px solid;
+        }
+        .alert-success { background: #2ea04311; border-color: var(--green); }
+        .alert-danger { background: #f8514911; border-color: var(--red); }
+        .alert-warning { background: #d2992211; border-color: var(--orange); }
+
+        /* Tabs */
+        .tab-bar {
+            display: flex;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 20px;
+        }
+        .tab-btn {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            padding: 12px 20px;
+            font-size: 14px;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            font-weight: 500;
+        }
+        .tab-btn:hover { color: var(--text-main); }
+        .tab-btn.active {
+            color: var(--text-main);
+            border-bottom-color: var(--primary);
+        }
+        .tab-count {
+            background: var(--border);
+            padding: 2px 6px;
+            border-radius: 10px;
+            font-size: 11px;
+            margin-left: 6px;
+        }
+        .tc-issues { background: var(--red); color: white; }
+
+        .tab-panel { display: none; }
+        .tab-panel.active { display: block; animation: fadeIn 0.3s; }
+        
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+        /* N+1 Cards */
+        .n1-card {
+            background: var(--bg-surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            margin-bottom: 16px;
+            overflow: hidden;
+        }
+        .n1-card-head {
+            background: #f8514911;
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .n1-fp { font-family: var(--font-mono); font-size: 13px; color: var(--red); }
+        .n1-count { font-weight: bold; background: var(--red); color: white; padding: 2px 8px; border-radius: 12px; font-size: 12px;}
+        
+        .n1-card-body { padding: 16px; }
+        .n1-src { font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); margin-bottom: 12px; }
+        
+        .n1-fix-box {
+            background: #2ea04311;
+            border: 1px solid #2ea04333;
+            padding: 12px;
+            border-radius: 6px;
+            position: relative;
+        }
+        .n1-fix-label { font-size: 12px; color: var(--green); font-weight: bold; margin-bottom: 8px; }
+        .n1-fix-text { font-family: var(--font-mono); font-size: 13px; line-height: 1.5; }
+        
+        .copy-btn {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            background: var(--bg-surface);
+            border: 1px solid var(--border);
+            color: var(--text-main);
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            cursor: pointer;
+        }
+        .copy-btn:hover { border-color: var(--primary); }
+        .copy-btn.copied { background: var(--green); color: white; border-color: var(--green); }
+
+        details { margin-top: 16px; }
+        summary { cursor: pointer; font-size: 13px; color: var(--primary); margin-bottom: 8px; }
+        .sample-sql {
+            display: block;
+            background: var(--bg-base);
+            padding: 12px;
+            border-radius: 6px;
+            font-family: var(--font-mono);
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-bottom: 8px;
+            overflow-x: auto;
+        }
+
+        /* Tables (Queries) */
+        .table-wrap {
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow-x: auto;
+        }
+        .q-table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+        }
+        .q-table th, .q-table td {
+            padding: 12px;
+            border-bottom: 1px solid var(--border);
+            font-size: 13px;
+        }
+        .q-table th { background: var(--bg-surface); color: var(--text-muted); font-weight: 500; }
+        .q-table tbody tr:last-child td { border-bottom: none; }
+        
+        .seq { color: var(--text-muted); width: 40px; }
+        .sql-code { font-family: var(--font-mono); color: #79c0ff; word-break: break-all; }
+        .t-ms { font-family: var(--font-mono); width: 80px; }
+        .t-ms.slow { color: var(--orange); font-weight: bold; }
+        .t-ms.very-slow { color: var(--red); font-weight: bold; }
+        .src-loc { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); }
+
+        /* JSON View */
+        .json-view {
+            background: var(--bg-surface);
+            padding: 16px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            font-family: var(--font-mono);
+            font-size: 13px;
+            white-space: pre-wrap;
+            overflow-x: auto;
+            line-height: 1.5;
+        }
+        .jk { color: #79c0ff; } /* string key */
+        .js { color: #a5d6ff; } /* string val */
+        .jn { color: #79c0ff; } /* number */
+        .jb { color: #ff7b72; } /* boolean */
+        .jz { color: #8b949e; } /* null */
+
+        /* Utility */
+        .tab-empty {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-muted);
+        }
+        .te-icon { font-size: 32px; margin-bottom: 16px; }
+        .tab-empty h4 { color: var(--text-main); margin-bottom: 8px; }
+        .se-item {
+            padding: 12px;
+            background: var(--bg-surface);
+            border-left: 3px solid var(--orange);
+            margin-bottom: 8px;
+            border-radius: 0 4px 4px 0;
+            font-family: var(--font-mono);
+            font-size: 13px;
+        }
+        .no-routes-placeholder {
+            padding: 20px;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 13px;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- SIDEBAR -->
+    <aside class="sidebar">
+        <div class="sidebar-header">
+            <h2>Da Profiler</h2>
+            <input type="text" id="search-input" class="search-box" placeholder="Search routes (Press '/' to focus)..." aria-label="Search routes">
+            <div class="filters">
+                <button class="filter-chip active" data-filter="all" aria-pressed="true">All</button>
+                <button class="filter-chip" data-filter="executable" aria-pressed="false">Executable</button>
+                <button class="filter-chip" data-filter="params" aria-pressed="false">Requires Params</button>
+            </div>
+        </div>
+        <div class="route-list-container" id="route-list">
+            <!-- Populated via JS -->
+        </div>
+    </aside>
+
+    <!-- MAIN CONTENT -->
+    <main class="main-content">
+        <!-- Empty State -->
+        <div id="empty-state" class="empty-state">
+            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom:16px; opacity:0.5;">
+                <circle cx="12" cy="12" r="10"></circle>
+                <polyline points="12 16 16 12 12 8"></polyline>
+                <line x1="8" y1="12" x2="16" y2="12"></line>
+            </svg>
+            <h3>Select a route to profile</h3>
+            <p style="font-size: 13px; margin-top: 8px;">Pick an executable endpoint from the sidebar.</p>
+        </div>
+
+        <!-- Profiler Panel -->
+        <div id="profiler-panel" class="profiler-panel" style="display: none;">
+            
+            <div class="prof-header">
+                <div id="prof-path">/api/example/</div>
+                <div id="prof-meta">
+                    <!-- Populated via JS -->
+                </div>
+            </div>
+
+            <div id="controls-bar" class="controls-bar">
+                <div class="control-group">
+                    <label>Method</label>
+                    <select id="method-select"></select>
+                </div>
+                
+                <div id="params-group" class="control-group" style="display:none;">
+                    <label>Path Params</label>
+                    <div id="params-inputs"></div>
+                </div>
+
+                <div class="control-group">
+                    <label>Seed Data Count</label>
+                    <input type="number" id="seed-count" value="5" min="0" max="100" style="width: 80px;">
+                </div>
+
+                <button id="run-btn" class="run-btn">Profile Route</button>
+            </div>
+
+            <div class="results-area" id="results-area">
+                <div id="results-placeholder" class="tab-empty" style="margin-top: 40px;">
+                    <div class="te-icon">⚡</div>
+                    <h4>Ready to Profile</h4>
+                    <p>Configure parameters above and hit Profile Route.</p>
+                </div>
+                
+                <div id="results-content" style="display: none;">
+                    <!-- Rendered via JS renderResult() -->
+                </div>
+            </div>
+
+        </div>
+    </main>
+
+    <!-- DATA INJECTION -->
+    <script id="routes-data" type="application/json">
+        {{ routes_json|safe }}
+    </script>
+
+    <!-- PROFILER LOGIC -->
+    <script>
+    /* =========================================================================
+       GLOBALS
+       ========================================================================= */
+    const ROUTES = JSON.parse(document.getElementById('routes-data').textContent || '[]');
+    let selected = null;
+    let activeFilter = 'all';
+    
+    /* =========================================================================
+       CSRF TOKEN RETRIEVAL
+       ========================================================================= */
+    function getCsrfToken() {
+      const meta = document.querySelector('meta[name="csrf-token"]');
+      if (meta && meta.content) return meta.content;
+      const m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+      return m ? decodeURIComponent(m[1]) : '';
+    }
+    
+    /* =========================================================================
+       METHOD BADGES
+       ========================================================================= */
+    const METHOD_CLS = {
+      GET: 'm-GET', POST: 'm-POST', PUT: 'm-PUT',
+      PATCH: 'm-PATCH', DELETE: 'm-DELETE',
+      HEAD: 'm-HEAD', OPTIONS: 'm-OPTIONS',
+    };
+    
+    function mBadge(m) {
+      return `<span class="m-badge ${METHOD_CLS[m] || 'm-HEAD'}">${esc(m)}</span>`;
+    }
+    
+    /* =========================================================================
+       SIDEBAR & ROUTE FILTERING
+       ========================================================================= */
+    function renderRouteList(query = '') {
+      const q = query.toLowerCase();
+      const list = document.getElementById('route-list');
+    
+      const visible = ROUTES.filter(r => {
+        if (activeFilter === 'executable' && !r.executable) return false;
+        if (activeFilter === 'params' && (!r.path_params || !r.path_params.length)) return false;
+        if (q && !r.path.toLowerCase().includes(q)
+              && !r.view_name.toLowerCase().includes(q)
+              && !(r.target_model || '').toLowerCase().includes(q)) return false;
+        return true;
+      });
+    
+      if (!visible.length) {
+        list.innerHTML = '<div class="no-routes-placeholder">No routes match your filter.</div>';
+        return;
+      }
+    
+      list.innerHTML = visible.map(r => {
+        const idx       = ROUTES.indexOf(r);
+        const methods   = r.methods.map(mBadge).join('');
+        const paramTag  = r.path_params && r.path_params.length
+          ? `<span class="rc-params">⬡ ${r.path_params.length} param${r.path_params.length > 1 ? 's' : ''}</span>`
+          : '';
+        const modelTag  = r.target_model
+          ? `<span class="rc-model">${esc(r.target_model)}</span>`
+          : '';
+        const isActive  = selected && ROUTES.indexOf(selected) === idx ? ' active' : '';
+        const isNotExec = !r.executable ? ' not-exec' : '';
+        const tooltip   = !r.executable ? ` title="${esc(r.reason_unexecutable || 'Not executable')}"` : '';
+    
+        return `<div class="route-card${isActive}${isNotExec}" data-idx="${idx}" ${tooltip}>
+          <div class="rc-path">${esc(r.path)}</div>
+          <div class="rc-meta">${methods}${paramTag}${modelTag}</div>
+        </div>`;
+      }).join('');
+    }
+    
+    function filterRoutes() {
+      renderRouteList(document.getElementById('search-input').value);
+    }
+    
+    function setFilter(f, btn) {
+      activeFilter = f;
+      document.querySelectorAll('.filter-chip').forEach(b => {
+        b.classList.remove('active');
+        b.setAttribute('aria-pressed', 'false');
+      });
+      btn.classList.add('active');
+      btn.setAttribute('aria-pressed', 'true');
+      filterRoutes();
+    }
+    
+    /* =========================================================================
+       ROUTE SELECTION
+       ========================================================================= */
+    function selectRoute(idx) {
+      if (!ROUTES[idx] || !ROUTES[idx].executable) return;
+      selected = ROUTES[idx];
+    
+      // Sidebar highlight
+      document.querySelectorAll('.route-card').forEach(c => c.classList.remove('active'));
+      const card = document.querySelector(`.route-card[data-idx="${idx}"]`);
+      if (card) card.classList.add('active');
+    
+      // Show profiler panel
+      document.getElementById('empty-state').style.display = 'none';
+      const panel = document.getElementById('profiler-panel');
+      panel.style.display = 'flex';
+    
+      // Header meta
+      document.getElementById('prof-path').textContent = selected.path;
+    
+      const execBadge = selected.executable
+        ? `<span class="exec-ok">✓ executable</span>`
+        : `<span class="exec-no" title="${esc(selected.reason_unexecutable)}">✗ not executable</span>`;
+    
+      const modelSpan = selected.target_model
+        ? `<span style="font-size:12px;font-family:var(--font-mono);color:var(--text-muted);">${esc(selected.target_model)}</span>`
+        : '';
+    
+      document.getElementById('prof-meta').innerHTML =
+        selected.methods.map(mBadge).join(' ') +
+        `<span class="view-type-pill">${esc(selected.view_type)}</span>` +
+        modelSpan + execBadge;
+    
+      // Method selector
+      const methodSel = document.getElementById('method-select');
+      methodSel.innerHTML = selected.methods.length
+        ? selected.methods.map(m => `<option value="${m}">${m}</option>`).join('')
+        : `<option value="GET">GET</option>`;
+    
+      // Path parameter inputs
+      const pGroup  = document.getElementById('params-group');
+      const pInputs = document.getElementById('params-inputs');
+    
+      if (selected.path_params && selected.path_params.length) {
+        pGroup.style.display = 'flex';
+        pInputs.innerHTML = selected.path_params.map(p => {
+          const placeholder = p.converter === 'int'  ? '42'
+                            : p.converter === 'uuid' ? 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'
+                            : 'value';
+          return `<div class="param-item" style="display:flex; flex-direction:column; gap:4px;">
+            <div class="param-label" style="font-size:11px; color:var(--text-muted);">${esc(p.name)}</div>
+            <input type="text"
+                   class="param-input"
+                   data-name="${esc(p.name)}"
+                   data-converter="${esc(p.converter)}"
+                   placeholder="${placeholder}"
+                   aria-label="Path parameter ${esc(p.name)}">
+          </div>`;
+        }).join('');
+      } else {
+        pGroup.style.display = 'none';
+        pInputs.innerHTML = '';
+      }
+    
+      // Reset results pane
+      document.getElementById('results-placeholder').style.display = 'block';
+      document.getElementById('results-content').style.display = 'none';
+      document.getElementById('results-content').innerHTML = '';
+    
+      document.getElementById('run-btn').disabled = false;
+    }
+    
+    /* =========================================================================
+       SANDBOX EXECUTION
+       ========================================================================= */
+    async function runProfile() {
+      if (!selected) return;
+    
+      const btn = document.getElementById('run-btn');
+      btn.classList.add('loading');
+      btn.disabled = true;
+    
+      // Collect path parameters
+      const pathParams = {};
+      document.querySelectorAll('.param-input').forEach(inp => {
+        const raw = inp.value.trim();
+        if (!raw) return;
+        const name = inp.dataset.name;
+        const conv = inp.dataset.converter;
+        pathParams[name] = conv === 'int' ? parseInt(raw, 10) : raw;
+      });
+    
+      const payload = {
+        route:        selected.path,
+        method:       document.getElementById('method-select').value,
+        seed_count:   Math.max(0, parseInt(document.getElementById('seed-count').value, 10) || 0),
+        path_params:  pathParams,
+        target_model: selected.target_model || null,
+      };
+    
+      try {
+        const res = await fetch('/dqs/profile/', {
+          method:  'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken':  getCsrfToken(),
+          },
+          body: JSON.stringify(payload),
+        });
+    
+        if (!res.ok && res.status === 403) {
+          renderResult({ error: 'Access denied. Da Profiler requires DEBUG=True.', status_code: 403 });
+          return;
+        }
+    
+        const result = await res.json();
+        renderResult(result);
+      } catch (err) {
+        renderResult({ error: `Network error: ${err.message}`, status_code: 0 });
+      } finally {
+        btn.classList.remove('loading');
+        btn.disabled = false;
+      }
+    }
+    
+    /* =========================================================================
+       RENDER RESULTS
+       ========================================================================= */
+    function renderResult(r) {
+      document.getElementById('results-placeholder').style.display = 'none';
+    
+      const content = document.getElementById('results-content');
+      content.style.display = 'block';
+    
+      const metrics  = r.metrics || {};
+      const queries  = r.queries || [];
+      const analysis = r.analysis || [];
+      const warnings = r.side_effect_warnings || [];
+      const n1       = !!metrics.n_plus_one_detected;
+      const sc       = r.status_code || 0;
+    
+      if (r.error && !queries.length) {
+        content.innerHTML = alertHtml('danger', `<strong>Sandbox Error</strong><br>${esc(r.error)}`);
+        return;
+      }
+    
+      const scCls  = sc >= 500 ? 'sc-5xx' : sc >= 400 ? 'sc-4xx' : sc >= 300 ? 'sc-3xx' : 'sc-2xx';
+      const totalQ = metrics.total_queries ?? queries.length;
+      const dbMs   = metrics.db_time_ms   ?? 0;
+      const totMs  = metrics.total_time_ms ?? 0;
+      const uFps   = metrics.unique_fingerprints ?? 0;
+    
+      // Metrics Grid
+      const metricsHtml = `
+        <div class="metrics-grid">
+          <div class="metric-card ${sc >= 200 && sc < 300 ? 'mc-ok' : sc >= 400 ? 'mc-warn' : 'mc-danger'}">
+            <div class="metric-label">HTTP Status</div>
+            <div class="metric-value"><span class="sc-pill ${scCls}">${sc || '—'}</span></div>
+            <div class="metric-sub">${esc(selected.path)}</div>
+          </div>
+          <div class="metric-card ${totalQ > 15 ? 'mc-danger' : totalQ > 5 ? 'mc-warn' : 'mc-ok'}">
+            <div class="metric-label">Total Queries</div>
+            <div class="metric-value">${totalQ}</div>
+            <div class="metric-sub">${uFps} unique shape${uFps !== 1 ? 's' : ''}</div>
+          </div>
+          <div class="metric-card ${dbMs > 500 ? 'mc-danger' : dbMs > 100 ? 'mc-warn' : 'mc-ok'}">
+            <div class="metric-label">DB Time</div>
+            <div class="metric-value">${dbMs.toFixed(1)}<span style="font-size:14px;font-weight:400;margin-left:4px;">ms</span></div>
+            <div class="metric-sub">Total: ${totMs.toFixed(1)} ms</div>
+          </div>
+          <div class="metric-card ${n1 ? 'mc-danger' : 'mc-ok'}">
+            <div class="metric-label">N+1 Status</div>
+            <div class="metric-value" style="color:${n1 ? 'var(--red)' : 'var(--green)'}">
+              ${n1 ? '⚠ Detected' : '✓ Clean'}
+            </div>
+            <div class="metric-sub">${analysis.length} issue${analysis.length !== 1 ? 's' : ''} found</div>
+          </div>
+        </div>`;
+    
+      const banner = n1
+        ? alertHtml('danger', `<strong>N+1 Query Bottleneck${analysis.length > 1 ? 's' : ''} Detected</strong> — ${analysis.length} issue${analysis.length > 1 ? 's' : ''} found. Apply the suggestions below to fix your queryset.`)
+        : alertHtml('success', '<strong>No N+1 Issues Found</strong> — Query patterns look healthy for this endpoint.');
+    
+      const errNotice = r.error ? alertHtml('warning', esc(r.error)) : '';
+    
+      // N+1 Tab HTML
+      const n1Html = analysis.length
+        ? analysis.map(a => `
+            <div class="n1-card">
+              <div class="n1-card-head">
+                <div class="n1-fp">${esc(a.fingerprint || '')}</div>
+                <span class="n1-count">×${a.count}</span>
+              </div>
+              <div class="n1-card-body">
+                ${a.source_location ? `<div class="n1-src">${esc(a.source_location)}</div>` : ''}
+                <div class="n1-fix-box">
+                  <div class="n1-fix-label">💡 Suggested Fix</div>
+                  <div class="n1-fix-text">${esc(a.suggestion || 'Review queryset relationships.')}</div>
+                  <button class="copy-btn" data-copy-text="${esc(a.suggestion || '')}">Copy Fix</button>
+                </div>
+                ${a.sample_queries && a.sample_queries.length > 1 ? `
+                  <details>
+                    <summary>${a.sample_queries.length} captured sample queries</summary>
+                    ${a.sample_queries.map(sq => `<code class="sample-sql">${esc(sq)}</code>`).join('')}
+                  </details>` : ''}
+              </div>
+            </div>`).join('')
+        : tabEmpty('✅', 'No N+1 Issues Found', 'All query patterns are healthy for this endpoint.');
+    
+      // Queries Tab HTML
+      const qHtml = queries.length
+        ? `<div class="table-wrap"><table class="q-table">
+            <thead><tr><th>#</th><th>SQL</th><th>ms</th><th>Source Location</th></tr></thead>
+            <tbody>
+            ${queries.map((q, i) => {
+              const t = q.time_ms || 0;
+              const tc = t > 200 ? 'very-slow' : t > 50 ? 'slow' : '';
+              return `<tr>
+                <td class="seq">${i + 1}</td>
+                <td class="sql-code">${esc(q.sql || '')}</td>
+                <td class="t-ms ${tc}">${t.toFixed(2)}</td>
+                <td class="src-loc">${esc(q.source_location || '—')}</td>
+              </tr>`;
+            }).join('')}
+            </tbody>
+           </table></div>`
+        : tabEmpty('📭', 'No Queries Captured', 'No database queries were executed during this run.');
+    
+      // Side Effects Tab HTML
+      const seHtml = warnings.length
+        ? warnings.map(w => `<div class="se-item"><span>${esc(w)}</span></div>`).join('')
+        : tabEmpty('🛡️', 'No Side Effect Warnings', 'No blocking calls or external I/O patterns detected.');
+    
+      // Response Body Tab HTML
+      const respHtml = r.response_body != null
+        ? `<div class="json-view">${syntaxJson(r.response_body)}</div>`
+        : tabEmpty('📭', 'No Response Body', 'The endpoint returned no parseable response body.');
+    
+      content.innerHTML = `
+        ${metricsHtml}
+        ${errNotice}
+        ${banner}
+        <div class="tab-bar" role="tablist">
+          <button class="tab-btn active" role="tab" aria-selected="true" data-tab="n1">
+            N+1 Analysis <span class="tab-count ${analysis.length ? 'tc-issues' : ''}">${analysis.length}</span>
+          </button>
+          <button class="tab-btn" role="tab" aria-selected="false" data-tab="queries">
+            All Queries <span class="tab-count">${queries.length}</span>
+          </button>
+          <button class="tab-btn" role="tab" aria-selected="false" data-tab="se">
+            Side Effects <span class="tab-count ${warnings.length ? 'tc-issues' : ''}">${warnings.length}</span>
+          </button>
+          <button class="tab-btn" role="tab" aria-selected="false" data-tab="resp">Response Body</button>
+        </div>
+        <div id="tab-n1" class="tab-panel active">${n1Html}</div>
+        <div id="tab-queries" class="tab-panel">${qHtml}</div>
+        <div id="tab-se" class="tab-panel">${seHtml}</div>
+        <div id="tab-resp" class="tab-panel">${respHtml}</div>
+      `;
+    
+      document.getElementById('results-area').scrollTop = 0;
+    }
+    
+    /* =========================================================================
+       UTILITIES & DELEGATION
+       ========================================================================= */
+    function esc(s) {
+      return String(s || '')
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+    }
+    
+    function alertHtml(type, body) {
+      return `<div class="alert alert-${type}"><div>${body}</div></div>`;
+    }
+    
+    function tabEmpty(icon, title, desc) {
+      return `<div class="tab-empty"><div class="te-icon">${icon}</div><h4>${esc(title)}</h4><p>${esc(desc)}</p></div>`;
+    }
+    
+    function copyToClipboard(btn, text) {
+      navigator.clipboard.writeText(text).then(() => {
+        btn.classList.add('copied');
+        btn.textContent = '✓ Copied!';
+        setTimeout(() => {
+          btn.classList.remove('copied');
+          btn.textContent = 'Copy Fix';
+        }, 2000);
+      }).catch(() => {
+        btn.textContent = '(failed to copy)';
+      });
+    }
+    
+    function syntaxJson(obj) {
+      let s;
+      try { s = JSON.stringify(obj, null, 2); }
+      catch { s = String(obj); }
+    
+      return s
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(
+          /("(\\u[\da-fA-F]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+-]?\d+)?)/g,
+          match => {
+            if (/^"/.test(match))    return /:$/.test(match) ? `<span class="jk">${match}</span>` : `<span class="js">${match}</span>`;
+            if (/true|false/.test(match)) return `<span class="jb">${match}</span>`;
+            if (/null/.test(match))       return `<span class="jz">${match}</span>`;
+            return `<span class="jn">${match}</span>`;
+          }
+        );
+    }
+    
+    /* =========================================================================
+       INITIALIZATION & EVENT BINDINGS
+       ========================================================================= */
+    document.addEventListener('DOMContentLoaded', () => {
+      renderRouteList();
+    
+      // Search Input Handler
+      const searchInp = document.getElementById('search-input');
+      if (searchInp) {
+        searchInp.addEventListener('input', filterRoutes);
+      }
+    
+      // Filter Chips Listener
+      document.querySelectorAll('.filter-chip').forEach(btn => {
+        btn.addEventListener('click', () => setFilter(btn.dataset.filter, btn));
+      });
+    
+      // Run Button Listener
+      const runBtn = document.getElementById('run-btn');
+      if (runBtn) {
+        runBtn.addEventListener('click', runProfile);
+      }
+    
+      // Event Delegation for Route Selection, Tabs & Copy Buttons
+      document.addEventListener('click', e => {
+        // Route card selection
+        const routeCard = e.target.closest('.route-card');
+        if (routeCard) {
+          selectRoute(parseInt(routeCard.dataset.idx, 10));
+          return;
+        }
+    
+        // Tab buttons
+        const tabBtn = e.target.closest('.tab-btn');
+        if (tabBtn) {
+          const tabName = tabBtn.dataset.tab;
+          document.querySelectorAll('.tab-btn').forEach(b => {
+            b.classList.remove('active');
+            b.setAttribute('aria-selected', 'false');
+          });
+          document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+          tabBtn.classList.add('active');
+          tabBtn.setAttribute('aria-selected', 'true');
+          document.getElementById('tab-' + tabName).classList.add('active');
+          return;
+        }
+    
+        // Copy buttons
+        const copyBtn = e.target.closest('.copy-btn');
+        if (copyBtn) {
+          copyToClipboard(copyBtn, copyBtn.dataset.copyText);
+        }
+      });
+    
+      // Enter key shortcut in controls bar to execute
+      document.getElementById('controls-bar').addEventListener('keydown', e => {
+        if (e.key === 'Enter') runProfile();
+      });
+    
+      // Keyboard hotkey: '/' to focus search input
+      document.addEventListener('keydown', e => {
+        if (e.key === '/' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) {
+          e.preventDefault();
+          searchInp.focus();
+        }
+      });
+    });
+    </script>
+</body>
+</html>

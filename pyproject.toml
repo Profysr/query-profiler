@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "da-profiler"
-version = "0.1.0"
+version = "0.3.0"
 description = "Da Profiler: Isolated query profiling and mock-data sandbox for Django REST endpoints"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -33,7 +33,7 @@ dependencies = [
 [project.optional-dependencies]
 django = [
     "django>=4.2",
-    "djangorestframework>=3.15",
+    "djangorestframework>=3.15.2",
     "model_bakery>=1.23",
     "psycopg2-binary>=2.9",
 ]
