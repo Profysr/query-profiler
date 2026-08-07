@@ -45,127 +45,146 @@ Output Structure
 ]`
 """
 import inspect
+import logging
 import re
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Type, Callable
-
-from django.apps import apps
+from typing import Any, Callable, Dict, List, Optional, Type
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.urls import URLPattern, URLResolver, get_resolver
-from django.urls.resolvers import RoutePattern
+from django.urls.resolvers import RoutePattern, RegexPattern
+from .types import PathParam, RouteMetadata
+from .converters import PathConverterResolver
 
+# Ensure DRF is present
+try:
+    from rest_framework.views import APIView
+except ImportError:
+    APIView = None
+
+logger = logging.getLogger(__name__)
 VALID_HTTP_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
-
-
-@dataclass
-class PathParam:
-    name: str
-    converter: str
-
-
-@dataclass
-class RouteMetadata:
-    path: str
-    methods: List[str]
-    view_name: str
-    view_type: str
-    is_drf: bool = True
-    executable: bool = True
-    path_params: List[PathParam] = field(default_factory=list)
-    target_model: Optional[str] = None
-    reason_unexecutable: Optional[str] = None
-    view_callable: Optional[Callable] = None
-
-    @property
-    def has_path_params(self) -> bool:
-        return len(self.path_params) > 0
-
 
 class DjangoIntrospector:
     """
-    Scans Django URL routes to find valid Django REST Framework (DRF) APIs,
-    extracts their database models, and maps out their required URL parameters.
+    Safely scans Django URL routes to discover DRF APIs, extracts target database models,
+    and maps URL route parameters without unsafe code execution.
     """
+
     def __init__(self):
-        # Safety check: DQS should only ever run in local development mode
         if not getattr(settings, "DEBUG", False):
             raise ImproperlyConfigured("DjangoIntrospector can only run when DEBUG=True.")
         self.resolver = get_resolver()
 
     def list_all_routes(self) -> List[RouteMetadata]:
-        """Step 1: Starts crawling the root URL list of the entire project."""
         routes: List[RouteMetadata] = []
         self._extract_patterns(self.resolver.url_patterns, prefix="/", routes=routes)
         return routes
 
     def _extract_patterns(self, patterns: List[Any], prefix: str, routes: List[RouteMetadata]) -> None:
-        """Step 2: Recursively walks through URL groups (resolvers) and individual URL endpoints."""
         for pattern in patterns:
+            # 1. Clean the path for both Resolvers (folders) and Patterns (endpoints)
+            full_path = self._get_clean_path(pattern, prefix)
+            
+            # It's a folder (like include('api.urls')), go deeper using the cleaned prefix
             if isinstance(pattern, URLResolver):
-                # If it's a folder of URLs (e.g., include('api.urls')), add its prefix and look inside
-                nested_prefix = prefix + str(pattern.pattern)
-                self._extract_patterns(pattern.url_patterns, nested_prefix, routes)
-            elif isinstance(pattern, URLPattern):
-                # Clean up regular expression symbols from old-school URL patterns
-                pattern_str = re.sub(r"^\^", "", str(pattern.pattern))
-                pattern_str = re.sub(r"\$$", "", pattern_str)
-                raw_path = (prefix + pattern_str).replace("//", "/")
-                full_path = raw_path.rstrip("?").replace("\\.", ".")
+                self._extract_patterns(pattern.url_patterns, full_path, routes)
                 
-                # Ignore our own DQS dashboard routes to avoid infinite loops
+            # It's an endpoint. Exclude internal dashboard routes
+            elif isinstance(pattern, URLPattern):
                 if full_path.startswith("/dqs/"):
                     continue
 
-                # Step 3: Analyze the individual endpoint view function
+                # Analyze the view using the beautiful, clean path
                 route_meta = self._analyze_view(pattern, full_path)
                 if route_meta:
                     routes.append(route_meta)
 
+    def _get_clean_path(self, pattern: Any, prefix: str) -> str:
+        """
+        Extracts the cleanest possible URL route, handling both Django's modern path()
+        and DRF's legacy regex-based routers for both Resolvers and Patterns.
+        """
+        # 1. Handled by Django's modern path() - zero manipulation needed
+        if isinstance(pattern.pattern, RoutePattern):
+            route = str(pattern.pattern) 
+            
+        # 2. Handled by DRF Routers or explicit re_path() - Legacy
+        elif isinstance(pattern.pattern, RegexPattern):
+            raw_regex = str(pattern.pattern)
+            route = re.sub(r"\(\?P<(\w+)>.*?\)", r"<\1>", raw_regex)  # Convert named groups to <param>
+            route = route.lstrip("^").rstrip("$").replace("\\.", ".")
+        else:
+            # Fallback for unknown custom patterns
+            route = str(pattern.pattern)
+
+        # Safely join the prefix and the route
+        combined = f"{prefix}/{route}".replace("//", "/")
+        
+        # Ensure it always starts with exactly one slash, but doesn't double up
+        return "/" + combined.strip("/")
+
+    def _extract_model_from_class(self, view_class: Type) -> Optional[str]:
+        """Inspect class attributes static metadata without instantiating or executing code."""
+        try:
+            # 1. Direct Queryset
+            queryset = getattr(view_class, "queryset", None)
+            if queryset is not None and hasattr(queryset, "model"):
+                model = queryset.model
+                return f"{model._meta.app_label}.{model._meta.object_name}"
+
+            # 2. Direct Model
+            model = getattr(view_class, "model", None)
+            if model and hasattr(model, "_meta"):
+                return f"{model._meta.app_label}.{model._meta.object_name}"
+
+            # 3. Serializer Class Meta Model
+            serializer_cls = getattr(view_class, "serializer_class", None)
+            if serializer_cls and hasattr(serializer_cls, "Meta"):
+                meta_model = getattr(serializer_cls.Meta, "model", None)
+                if meta_model and hasattr(meta_model, "_meta"):
+                    return f"{meta_model._meta.app_label}.{meta_model._meta.object_name}"
+
+            # SAFE Static Analysis for get_queryset return type hint if available
+            if hasattr(view_class, "get_queryset"):
+                return_type = inspect.signature(view_class.get_queryset).return_annotation
+                if return_type and hasattr(return_type, "model"):
+                    m = return_type.model
+                    return f"{m._meta.app_label}.{m._meta.object_name}"
+
+        except Exception as e:
+            logger.debug("Model extraction failed for %s: %s", view_class, e)
+
+        return None
+
     def _extract_path_params(self, pattern: URLPattern) -> List[PathParam]:
-        """Extracts URL parameters from modern Django RoutePattern converters."""
-        # Local import avoids circular dependency: converters.py imports PathParam/RouteMetadata from this module.
-        from dqs.adapters.drf.converters import PathConverterResolver
-        return PathConverterResolver.extract_converters_from_pattern(pattern)
+        try:
+            return PathConverterResolver.extract_converters_from_pattern(pattern)
+        except Exception as e:
+            logger.warning("Failed to extract path params for %s: %s", pattern, e)
+            return []
 
     def _analyze_view(self, pattern: URLPattern, full_path: str) -> Optional[RouteMetadata]:
-        """Step 3 (cont.): Inspects a specific view function to ensure it's a valid DRF API."""
         callback = pattern.callback
         if not callable(callback):
             return None
 
-        try:
-            unwrapped_callback = inspect.unwrap(callback)
-        except Exception:
-            unwrapped_callback = callback
+        unwrapped_callback = inspect.unwrap(callback)
 
-        # Pull out the underlying view class
         view_class: Optional[Type] = (
             getattr(callback, "view_class", None)
             or getattr(callback, "cls", None)
             or getattr(unwrapped_callback, "view_class", None)
             or getattr(unwrapped_callback, "cls", None)
         )
-        
-        if view_class is None:
-            return None
-            
-        # Extract the original callable for AST static analysis. 
-        # Prefer the underlying view class for DRF, fallback to the raw callback.
-        original_callable = view_class if view_class else pattern.callback
 
-
-        # Gate: Ignore non-DRF views (plain Django views)
-        is_drf = any("rest_framework" in f"{base.__module__}.{base.__name__}" for base in inspect.getmro(view_class))
-        if not is_drf:
+        if view_class is None or APIView is None or not issubclass(view_class, APIView):
             return None
 
-        # Step 4: Extract model and path parameters
         target_model = self._extract_model_from_class(view_class)
         path_params = self._extract_path_params(pattern)
 
-        # Determine HTTP methods allowed (GET, POST, etc.)
-        if hasattr(view_class, "get_queryset") and hasattr(callback, "actions"):
+        # Handle ViewSet Actions vs Regular APIViews
+        if hasattr(callback, "actions"):
             actions: dict = getattr(callback, "actions", {})
             methods = [m.upper() for m in actions.keys() if m.upper() in VALID_HTTP_METHODS]
             executable = len(methods) > 0
@@ -177,7 +196,7 @@ class DjangoIntrospector:
                 if hasattr(view_class, m) and m.upper() in VALID_HTTP_METHODS
             ]
             executable = len(methods) > 0
-            reason = None if executable else "Could statically resolve http_method_names."
+            reason = None if executable else "Could not resolve http_method_names."
             view_type = "DRF_APIView"
 
         return RouteMetadata(
@@ -189,61 +208,5 @@ class DjangoIntrospector:
             path_params=path_params,
             target_model=target_model,
             reason_unexecutable=reason,
-            view_callable=original_callable,
+            view_callable=view_class,
         )
-
-    def extract_view_lookup_map(self, view_class: Optional[Type]) -> Dict[str, str]:
-        """
-        Inspects DRF view class for lookup_url_kwarg and lookup_field mappings
-        (e.g., article_slug -> slug, or pk -> id).
-        """
-        if view_class is None:
-            return {}
-
-        lookup_field = getattr(view_class, "lookup_field", "pk")
-        lookup_url_kwarg = getattr(view_class, "lookup_url_kwarg", None) or lookup_field
-        
-        # Maps the parameter name as it appears in the URL to the model field name
-        return {lookup_url_kwarg: lookup_field}
-
-    def _extract_model_from_class(self, view_class: Type) -> Optional[str]:
-        """Step 4 (cont.): Figures out which database model this view talks to."""
-        try:
-            # 1. Check direct queryset attribute
-            queryset = getattr(view_class, "queryset", None)
-            if queryset is not None and hasattr(queryset, "model"):
-                model = queryset.model
-                return f"{model._meta.app_label}.{model._meta.object_name}"
-
-            # 2. Check direct model attribute
-            model = getattr(view_class, "model", None)
-            if model and hasattr(model, "_meta"):
-                return f"{model._meta.app_label}.{model._meta.object_name}"
-
-            # 3. Check serializer definition
-            serializer_cls = getattr(view_class, "serializer_class", None)
-            if serializer_cls and hasattr(serializer_cls, "Meta"):
-                meta_model = getattr(serializer_cls.Meta, "model", None)
-                if meta_model and hasattr(meta_model, "_meta"):
-                    return f"{meta_model._meta.app_label}.{meta_model._meta.object_name}"
-
-            # 4. Fallback: Safely evaluate dynamic get_queryset() methods using a mock request
-            if hasattr(view_class, "get_queryset"):
-                from django.test import RequestFactory
-                from django.contrib.auth.models import AnonymousUser
-                factory = RequestFactory()
-                dummy_request = factory.get("/")
-                dummy_request.user = AnonymousUser()
-                
-                instance = view_class()
-                instance.request = dummy_request
-                instance.args = ()
-                instance.kwargs = {}
-                qs = instance.get_queryset()
-                if hasattr(qs, "model"):
-                    m = qs.model
-                    return f"{m._meta.app_label}.{m._meta.object_name}"
-        except Exception:
-            pass
-            
-        return None

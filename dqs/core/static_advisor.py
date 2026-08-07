@@ -121,9 +121,7 @@ class StaticASTAdvisor(ast.NodeVisitor):
         """
         Determines if a call node is a Django ORM query using AST structure.
         Returns (is_match, confidence) — confidence is "high" or "low".
-        "low" confidence findings are still reported, but at reduced severity,
-        since generic method names (.get(), .filter(), .all()) are common on
-        non-Django classes too and shouldn't be flagged as loudly.
+        "low" confidence findings are still reported, but at reduced severity, since generic method names (.get(), .filter(), .all()) are common on non-Django classes too and shouldn't be flagged as loudly.
         """
         # High confidence: explicit manager access — unambiguous Django pattern.
         if ".objects." in call_repr or call_repr.startswith("objects."):

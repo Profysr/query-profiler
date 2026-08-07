@@ -11,9 +11,11 @@ import logging
 import uuid
 from typing import Any, Dict, List, Optional, Type, Union
 from django.apps import apps
+from django.conf import settings
 from django.db import models
 from model_bakery import baker
 from model_bakery.exceptions import ModelBakeryException
+from dqs.adapters.drf.router import SEED_MIN_THRESHOLD, SEED_MAX_CAP
 
 logger = logging.getLogger("dqs.mock_generator")
 
@@ -24,6 +26,41 @@ class ModelBakeryGenerator:
     and validation recovery mechanisms.
     """
     _sample_cache: Dict[str, List[models.Model]] = {}
+
+    @classmethod
+    def ensure_capped_seeding(
+        cls,
+        model_or_path: Union[str, Type[models.Model]],
+        min_threshold: int = SEED_MIN_THRESHOLD,
+        max_cap: int = SEED_MAX_CAP,
+    ) -> Dict[str, Any]:
+        """
+        Ensures the shadow database contains at least min_threshold records.
+        If it falls below, triggers the generator to seed up to max_cap records.
+        """
+        model_class = cls._resolve_model(model_or_path)
+        if not model_class:
+            return {"status": "error", "message": f"Could not resolve model {model_or_path}"}
+
+        db_alias = "dqs_shadow" if "dqs_shadow" in settings.DATABASES else "default"
+        count = model_class.objects.using(db_alias).count()
+
+        seeded_count = 0
+        instances = []
+        if count < min_threshold:
+            to_seed = max_cap - count
+            if to_seed > 0:
+                instances = cls.generate(model_class, quantity=to_seed, commit=True)
+                seeded_count = len(instances)
+
+        return {
+            "model": f"{model_class._meta.app_label}.{model_class._meta.object_name}",
+            "initial_count": count,
+            "final_count": count + seeded_count,
+            "seeded_count": seeded_count,
+            "instances": [{"pk": obj.pk, "__str__": str(obj)} for obj in instances],
+            "raw_instances": instances,
+        }
 
     @classmethod
     def generate(
