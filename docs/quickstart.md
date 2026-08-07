@@ -39,10 +39,19 @@ INSTALLED_APPS = [
     # ... your existing Django apps ...
     'dqs.adapters.drf',  # Registers Da Profiler Django adapter
 ]
+
+DATABASE_ROUTERS = [
+    'dqs.adapters.drf.router.DQSRouter',  # Registers Da Profiler database router
+]
 ```
 
 > [!IMPORTANT]
 > **Safety Guard**: Da Profiler requires `DEBUG = True` in your settings to protect production environments from running sandbox simulations.
+>
+> **Shadow Database Setup**: Configure a `dqs_shadow` entry in `DATABASES` matching your engine and run migrations:
+> ```bash
+> python manage.py migrate --database=dqs_shadow
+> ```
 
 ---
 

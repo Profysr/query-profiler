@@ -19,7 +19,26 @@ class RouteMetadata:
     target_model: Optional[str] = None
     reason_unexecutable: Optional[str] = None
     view_callable: Optional[Callable] = None
+    lookup_map: Dict[str, str] = field(default_factory=dict)
 
     @property
     def has_path_params(self) -> bool:
         return len(self.path_params) > 0
+
+@dataclass
+class ExecutionResult:
+    """Encapsulates the execution metrics, query logs, and analysis payload for a profiled target."""
+    route: str
+    status_code: int
+    metrics: Dict[str, Any] = field(default_factory=dict)
+    queries: List[Dict[str, Any]] = field(default_factory=list)
+    analysis: List[Dict[str, Any]] = field(default_factory=list)
+    error: Optional[str] = None
+    side_effect_warnings: List[str] = field(default_factory=list)
+    response_body: Optional[Any] = None
+    seeded_records: List[Dict[str, Any]] = field(default_factory=list)
+    request_spec: Optional[Dict[str, Any]] = None
+
+class SeedDataRequiredError(Exception):
+    """Raised when automated mock generation fails, requiring user-provided JSON records."""
+    pass

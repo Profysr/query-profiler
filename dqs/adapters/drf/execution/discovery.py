@@ -1,11 +1,11 @@
 import inspect
 import logging
+import weakref
 from typing import Any, Dict, List, Optional
 from django.db.models.signals import post_save, pre_save, post_delete, pre_delete
 from dqs.core.targets import Target
 from django.apps import apps
-import weakref
-from dqs.adapters.drf.schema_advisor import check_missing_indexes, check_pk_strategy
+from dqs.adapters.drf.execution.schema_advisor import check_missing_indexes, check_pk_strategy
 from dqs.core.static_advisor import StaticASTAdvisor
 
 logger = logging.getLogger("dqs")

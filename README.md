@@ -182,7 +182,56 @@ Add `dqs.adapters.drf` to your `INSTALLED_APPS` (development environment only):
 # settings.py
 if DEBUG:
     INSTALLED_APPS += ["dqs.adapters.drf"]
+    DATABASE_ROUTERS = ["dqs.adapters.drf.router.DQSRouter"]
 ```
+
+### ⚙️ Shadow Database Setup & Telemetry Isolation
+
+To isolate your default database from testing telemetry, configure a `'dqs_shadow'` entry in your `settings.DATABASES` matching your backend engine:
+
+```python
+# settings.py
+DATABASES = {
+    "default": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": "my_db",
+        "USER": "db_user",
+        "PASSWORD": "db_password",
+        "HOST": "localhost",
+        "PORT": "5432",
+    },
+    "dqs_shadow": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": "my_db_shadow",
+        "USER": "db_user",
+        "PASSWORD": "db_password",
+        "HOST": "localhost",
+        "PORT": "5432",
+    },
+}
+```
+
+To initialize or update your shadow database schema, execute migrations against the `dqs_shadow` database:
+
+```bash
+python manage.py migrate --database=dqs_shadow
+```
+
+#### Safe Execution Context (`profiling_session`)
+
+Wrap any custom execution or seeding block in the `profiling_session()` context manager to route queries to `dqs_shadow`:
+
+```python
+from dqs.adapters.drf.router import profiling_session
+from dqs.adapters.drf.mock_generator import ModelBakeryGenerator
+
+with profiling_session():
+    # 1. Capped seeding (seeds up to 50 records if count < 1)
+    ModelBakeryGenerator.ensure_capped_seeding("sample_app.Book", min_threshold=1, max_cap=50)
+    
+    # 2. View execution or ORM queries hit 'dqs_shadow'
+```
+
 
 ---
 

@@ -11,6 +11,8 @@ from django.http import HttpResponseForbidden, JsonResponse
 from django.shortcuts import render
 from django.utils.decorators import method_decorator
 from django.views import View
+from dqs.adapters.drf.execution.runner import DjangoSandboxRunner
+from dqs.adapters.drf.routing.introspector import DjangoIntrospector
 
 # ---------------------------------------------------------------------------
 # Helpers & Security Guardrails
@@ -65,7 +67,6 @@ class DQSDashboardView(View):
         return super().dispatch(request, *args, **kwargs)
 
     def get(self, request):
-        from dqs.adapters.drf.introspector import DjangoIntrospector
 
         try:
             introspector = DjangoIntrospector()
@@ -94,7 +95,6 @@ class DQSProfileView(View):
         return super().dispatch(request, *args, **kwargs)
 
     def post(self, request):
-        from dqs.adapters.drf.runner import DjangoSandboxRunner
 
         try:
             body = json.loads(request.body)
