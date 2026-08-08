@@ -78,17 +78,29 @@ Da Profiler enforces a clean architectural separation:
 
 ```
 dqs/
-├── core/                  # Pure Python engine — zero Django dependencies
-│   ├── analyzer.py        # AST SQL fingerprinting & N+1 detection
-│   ├── static_advisor.py  # Pure AST code scanner (loops & blocking I/O)
-│   └── targets.py         # Framework-agnostic Target model
+├── core/                      # Pure Python engine — zero Django dependencies
+│   ├── analyzer.py            # AST SQL fingerprinting & N+1 detection
+│   ├── static_advisor.py      # Pure AST code scanner (loops & blocking I/O)
+│   └── targets.py             # Framework-agnostic Target model
 └── adapters/
-    └── drf/               # Django & DRF integration adapter
-        ├── discovery.py   # Route, signal, task, and consumer discovery
-        ├── runner.py      # Isolated savepoint execution runner
-        ├── converters.py  # Dynamic path parameter resolver
-        ├── body_inferrer.py# Serializer request payload inferrer
-        └── mock_generator.py # Model Bakery mock data engine
+    └── drf/                   # Django & DRF integration adapter
+        ├── apps.py            # Django AppConfig (DEBUG guard)
+        ├── router.py          # Shadow DB router & profiling_session
+        ├── types.py           # Shared dataclasses
+        ├── views.py           # Dashboard & AJAX endpoints
+        ├── urls.py            # URL config (/dqs/, /dqs/profile/)
+        ├── database/
+        │   └── db_manager.py  # Shadow DB validation & migrations
+        ├── routing/
+        │   ├── introspector.py    # URL route pattern tree walker
+        │   └── converters.py      # Dynamic path parameter resolver
+        ├── mocking/
+        │   └── generator.py       # Model Bakery wrapper & body inference
+        └── execution/
+            ├── discovery.py       # Target discovery (views, signals, tasks)
+            ├── query_interceptor.py # DB execute_wrapper hook
+            ├── runner.py          # Savepoint execution engine
+            └── schema_advisor.py  # Schema & PK strategy recommendations
 ```
 
 > 📖 For full system diagrams and execution sequence specifications, check out [`ARCHITECTURE.md`](./ARCHITECTURE.md).
@@ -149,7 +161,7 @@ For routes like `/books/<int:pk>/` or `/authors/<uuid:id>/`:
    (int, uuid, slug, str, path)     (via model_bakery & cache)           (/books/42/)
 ```
 
-`POST` / `PUT` request bodies are dynamically built by `dqs.adapters.drf.body_inferrer` by inspecting DRF serializers (`serializer_class`) or Django forms.
+`POST` / `PUT` request bodies are dynamically built by `dqs.adapters.drf.mocking.generator.infer_request_body` by inspecting DRF serializers (`serializer_class`) or Django forms.
 
 ---
 
@@ -223,7 +235,7 @@ Wrap any custom execution or seeding block in the `profiling_session()` context 
 
 ```python
 from dqs.adapters.drf.router import profiling_session
-from dqs.adapters.drf.mock_generator import ModelBakeryGenerator
+from dqs.adapters.drf.mocking.generator import ModelBakeryGenerator
 
 with profiling_session():
     # 1. Capped seeding (seeds up to 50 records if count < 1)
@@ -231,7 +243,6 @@ with profiling_session():
     
     # 2. View execution or ORM queries hit 'dqs_shadow'
 ```
-
 
 ---
 
@@ -258,17 +269,85 @@ docker compose exec web python manage.py migrate
 
 ## 🧪 Running Tests
 
-Run the test suite inside the Docker container using `pytest`:
+Da Profiler uses **pytest** with a marker-based test architecture.
+
+### Test Architecture
+
+```
+tests/
+├── conftest.py                      # Root: marker registration
+├── core/                            # Marker: `core` — pure Python, no DB
+│   ├── conftest.py                  # Auto-marks all tests as `core`
+│   ├── test_analyzer.py             # SQL AST fingerprinting & N+1 detection
+│   └── test_static_advisor.py       # Python AST static code scanning
+└── adapters/
+    └── drf/                         # Marker: `django` + `drf` — requires DB
+        ├── conftest.py              # Shared fixtures: runner, introspector, seeded_book
+        ├── test_body_inferrer.py    # Request body inference tests
+        ├── test_converters.py       # PathConverterResolver unit tests
+        ├── test_discovery.py        # Signal & task discovery tests
+        ├── test_introspector.py     # URL route scanning and lookup map tests
+        ├── test_query_interceptor.py# DB execute_wrapper SQL capture tests
+        ├── test_runner.py           # SandboxRunner & step-driven pipeline tests
+        └── test_runner_integration.py # Setup isolation & savepoint rollback test
+```
+
+### Marker Taxonomy
+
+| Marker | Meaning | Requires DB? | Speed |
+|---|---|---|---|
+| `core` | Pure Python (`dqs/core/`) — no Django, no ORM | No | ⚡ Fastest |
+| `django` | Django ORM + DB access (`dqs/adapters/drf/`) | Yes | 🐢 Slower |
+| `drf` | DRF adapter subset of django tests | Yes | 🐢 Slower |
+
+### Running the Test Commands
+
+#### Option 1: From Source Repository (Recommended)
 
 ```bash
-# Run all tests
-docker compose run --rm web pytest
+# 1. Install package in editable mode with dev dependencies
+pip install -e ".[dev]"
 
-# Run pure core tests (framework-agnostic, zero DB)
-docker compose run --rm web pytest -m core
+# 2. Go to demo project for Django tests
+cd demos/drf
 
-# Run Django adapter tests
-docker compose run --rm web pytest -m django
+# 3. Run migrations on shadow database
+python manage.py migrate --database=dqs_shadow
+
+# 4. Run tests
+pytest -m core        # Pure Python tests (fastest — no DB, no Django setup)
+pytest -m django      # Django/DRF adapter tests
+pytest -v             # All tests with verbose output
+```
+
+#### Option 2: Docker Compose (Full Stack)
+
+```bash
+# From repository root
+docker compose build
+docker compose up -d db
+docker compose up -d
+
+# Run tests inside container
+docker compose exec web pytest -m core
+docker compose exec web pytest -m django
+```
+
+#### Option 3: Install Built Package in Demo Project
+
+```bash
+# 1. Build the package
+pip install build
+python -m build
+
+# 2. Install in demo project
+cd demos/drf
+pip install ../../dist/da_profiler-0.3.0-py3-none-any.whl[django]
+
+# 3. Run migrations and tests
+python manage.py migrate --database=dqs_shadow
+pytest -m core
+pytest -m django
 ```
 
 ---
@@ -281,6 +360,10 @@ docker compose run --rm web pytest -m django
 - 🤝 [`CONTRIBUTING.md`](./CONTRIBUTING.md) — Contribution guidelines, dev setup, and commit standards.
 - 🔒 [`SECURITY.md`](./SECURITY.md) — Security policy and vulnerability reporting.
 - 📜 [`CODE_OF_CONDUCT.md`](./CODE_OF_CONDUCT.md) — Community guidelines.
+- 🚀 [`docs/quickstart.md`](./docs/quickstart.md) — 5-minute getting started guide.
+- 💡 [`docs/how-it-works.md`](./docs/how-it-works.md) — ELI5 explanations of core concepts.
+- 🧪 [`docs/how-to-test.md`](./docs/how-to-test.md) — Integration, profiling & testing guide.
+- 🛠️ [`docs/developer-onboarding.md`](./docs/developer-onboarding.md) — File-by-file codebase reference.
 
 ---
 
@@ -289,4 +372,3 @@ docker compose run --rm web pytest -m django
 Contributions are welcome! Please review [`CONTRIBUTING.md`](./CONTRIBUTING.md) before opening a pull request.
 
 Distributed under the **MIT License**. See [`LICENSE`](./LICENSE) for details.
- 

@@ -6,7 +6,7 @@ Welcome to **Da Profiler**! This guide will help you install and run your very f
 
 ## 🧒 What are we trying to do?
 
-Imagine you want to test how fast your web app gets data from the database, but you don't want to mess up your real database or click 100 buttons on your website. 
+Imagine you want to test how fast your web app gets data from the database, but you don't want to mess up your real database or click 100 buttons on your website.
 
 With Da Profiler:
 1. You install the package.
@@ -21,7 +21,7 @@ With Da Profiler:
 Add `da-profiler` to your Django project's dependencies:
 
 ```bash
-pip install da-profiler
+pip install da-profiler[django]
 ```
 
 *(Or if working from the source repository, `pip install -e .`)*
@@ -60,7 +60,7 @@ DATABASE_ROUTERS = [
 You can run Da Profiler directly from Python code or a management script:
 
 ```python
-from dqs.adapters.drf.runner import DjangoSandboxRunner
+from dqs.adapters.drf.execution.runner import DjangoSandboxRunner
 from dqs.core.analyzer import detect_n_plus_one
 
 # 1. Initialize the sandbox runner
@@ -69,21 +69,19 @@ runner = DjangoSandboxRunner()
 # 2. Execute an endpoint in isolated savepoint sandbox
 # (This simulates GET /api/books/ without saving anything to the DB!)
 result = runner.execute_isolated(
-    path="/api/books/",
+    url_name_or_path="/api/books/",
     method="GET"
 )
 
-print(f"Status Code: {result['status_code']}")
-print(f"Total Database Queries Fired: {result['query_count']}")
+print(f"Status Code: {result.status_code}")
+print(f"Total Database Queries Fired: {result.metrics['total_queries']}")
 
 # 3. Analyze for N+1 bottlenecks
-n_plus_one_flags = detect_n_plus_one(result['queries'], threshold=3)
-
-for flag in n_plus_one_flags:
+for n1 in result.analysis:
     print("\n⚠️ Bottleneck Detected!")
-    print(f"File & Line: {flag['source_location']}")
-    print(f"Repeated Query Count: {flag['count']}")
-    print(f"Suggested Fix: {flag['suggestion']}")
+    print(f"File & Line: {n1['src_loc']}")
+    print(f"Repeated Query Count: {n1['count']}")
+    print(f"Suggested Fix: {n1['suggestion']}")
 ```
 
 ---
