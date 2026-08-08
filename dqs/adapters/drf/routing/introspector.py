@@ -11,15 +11,14 @@ and view lookup mappings (lookup_field / lookup_url_kwarg).
 import inspect
 import logging
 import re
-from typing import Any, Callable, Dict, List, Optional, Set, Type
+from typing import Any
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.urls import URLPattern, URLResolver, get_resolver
 from django.urls.resolvers import RegexPattern, RoutePattern
-
+from dqs.adapters.drf.routing.converters import PathConverterResolver
 from dqs.adapters.drf.types import PathParam, RouteMetadata
-from dqs.adapters.drf.converters import PathConverterResolver
 
 try:
     from rest_framework.views import APIView
@@ -29,8 +28,8 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 # Primary HTTP verbs used to evaluate route executability
-CORE_HTTP_METHODS: Set[str] = {"GET", "POST", "PUT", "PATCH", "DELETE"}
-VALID_HTTP_METHODS: Set[str] = CORE_HTTP_METHODS | {"HEAD", "OPTIONS"}
+CORE_HTTP_METHODS: set[str] = {"GET", "POST", "PUT", "PATCH", "DELETE"}
+VALID_HTTP_METHODS: set[str] = CORE_HTTP_METHODS | {"HEAD", "OPTIONS"}
 
 
 # =============================================================================
@@ -51,13 +50,13 @@ class DjangoIntrospector:
     # =========================================================================
     # Step 03 - URL Tree Traversal & Route Discovery Entry Point
     # =========================================================================
-    def list_all_routes(self) -> List[RouteMetadata]:
+    def list_all_routes(self) -> list[RouteMetadata]:
         """Step 03.1 - Public entry point: Recursively scans root URL patterns."""
-        routes: List[RouteMetadata] = []
+        routes: list[RouteMetadata] = []
         self._extract_patterns(self.resolver.url_patterns, prefix="/", routes=routes)
         return routes
 
-    def _extract_patterns(self, patterns: List[Any], prefix: str, routes: List[RouteMetadata]) -> None:
+    def _extract_patterns(self, patterns: list[Any], prefix: str, routes: list[RouteMetadata]) -> None:
         """Step 03.2 - Recursive URL pattern tree walker handling resolvers and leaves."""
         for pattern in patterns:
             full_path = self._get_clean_path(pattern, prefix)
@@ -100,7 +99,7 @@ class DjangoIntrospector:
     # =========================================================================
     # Step 05 - Multi-Strategy Model Discovery Engine
     # =========================================================================
-    def _extract_model_from_class(self, view_class: Type) -> Optional[str]:
+    def _extract_model_from_class(self, view_class: type) -> str | None:
         """
         Step 05.1 - Attempts to determine target Django Model from view attributes:
         1. Class static `queryset` attribute
@@ -129,7 +128,7 @@ class DjangoIntrospector:
                 try:
                     serializer_cls = view_class.get_serializer_class(None)
                 except Exception:
-                    pass
+                    logger.debug("Could not inspect serializer class for %s", view_class)
 
             if serializer_cls and hasattr(serializer_cls, "Meta"):
                 meta_model = getattr(serializer_cls.Meta, "model", None)
@@ -155,12 +154,12 @@ class DjangoIntrospector:
     # =========================================================================
     # Step 06 - View Lookup Field Mapping Extraction
     # =========================================================================
-    def _extract_view_lookup_map(self, view_class: Type) -> Dict[str, str]:
+    def _extract_view_lookup_map(self, view_class: type) -> dict[str, str]:
         """
         Step 06.1 - Extracts DRF lookup mapping for path parameters.
         e.g. lookup_field = "sha_256", lookup_url_kwarg = "hash" -> maps {"hash": "sha_256"}
         """
-        lookup_map: Dict[str, str] = {}
+        lookup_map: dict[str, str] = {}
         lookup_field = getattr(view_class, "lookup_field", "pk")
         lookup_url_kwarg = getattr(view_class, "lookup_url_kwarg", None) or lookup_field
 
@@ -172,7 +171,7 @@ class DjangoIntrospector:
     # =========================================================================
     # Step 07 - Path Parameter Extraction Engine (Route & Regex Fallbacks)
     # =========================================================================
-    def _extract_path_params(self, pattern: URLPattern) -> List[PathParam]:
+    def _extract_path_params(self, pattern: URLPattern) -> list[PathParam]:
         """
         Step 07.1 - Extracts parameter metadata using PathConverterResolver with
         a fallback regex parser for re_path routes.
@@ -197,7 +196,7 @@ class DjangoIntrospector:
     # =========================================================================
     # Step 08 - DRF View & ViewSet Analysis Engine
     # =========================================================================
-    def _analyze_view(self, pattern: URLPattern, full_path: str) -> Optional[RouteMetadata]:
+    def _analyze_view(self, pattern: URLPattern, full_path: str) -> RouteMetadata | None:
         """
         Step 08.1 - Analyzes URL callback to determine if it target a DRF APIView or ViewSet,
         validating supported HTTP methods and resolving metadata.
@@ -208,7 +207,7 @@ class DjangoIntrospector:
 
         unwrapped_callback = inspect.unwrap(callback)
 
-        view_class: Optional[Type] = (
+        view_class: type | None = (
             getattr(callback, "view_class", None)
             or getattr(callback, "cls", None)
             or getattr(unwrapped_callback, "view_class", None)
@@ -225,7 +224,7 @@ class DjangoIntrospector:
         # Step 08.2 - ViewSet Action Resolution vs APIView Method Resolution
         if hasattr(callback, "actions"):
             actions: dict = getattr(callback, "actions", {})
-            methods = [m.upper() for m in actions.keys() if m.upper() in VALID_HTTP_METHODS]
+            methods = [m.upper() for m in actions if m.upper() in VALID_HTTP_METHODS]
             executable = len(methods) > 0
             reason = None if executable else "Could not resolve ViewSet actions mapping."
             view_type = "DRF_ViewSet"

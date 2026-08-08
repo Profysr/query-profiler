@@ -15,17 +15,18 @@ that is captured by the runner to request user/agent manual seeding (2-3 records
 import inspect
 import logging
 import re
-from typing import Any, Dict, List, Optional, Tuple, Type
+from typing import Any
 
 from django.apps import apps
 from django.conf import settings
-from django.db import models, DatabaseError as DjangoDatabaseError
+from django.db import DatabaseError as DjangoDatabaseError
+from django.db import models
 from django.urls import URLPattern, reverse
 from django.urls.resolvers import RoutePattern
-
-from dqs.adapters.drf.types import PathParam, RouteMetadata, SeedDataRequiredError
-from dqs.adapters.drf.router import profiling_session, SHADOW_DB_ALIAS
+from django.urls.exceptions import NoReverseMatch
 from dqs.adapters.drf.mocking.generator import ModelBakeryGenerator
+from dqs.adapters.drf.router import SHADOW_DB_ALIAS, profiling_session
+from dqs.adapters.drf.types import PathParam, RouteMetadata, SeedDataRequiredError
 
 logger = logging.getLogger("da_profiler.converters")
 
@@ -44,10 +45,10 @@ class PathConverterResolver:
         return converter_name or "str"
 
     @classmethod
-    def extract_converters_from_pattern(cls, pattern: URLPattern) -> List[PathParam]:
+    def extract_converters_from_pattern(cls, pattern: URLPattern) -> list[PathParam]:
         """Step 02.2 - Parses Django RoutePattern instances to extract path parameter names and types."""
         route_pattern = getattr(pattern, "pattern", None)
-        params: List[PathParam] = []
+        params: list[PathParam] = []
 
         if isinstance(route_pattern, RoutePattern):
             for name, converter in route_pattern.converters.items():
@@ -60,7 +61,7 @@ class PathConverterResolver:
     # Step 03 - Automated DRF View Lookup Field Inspector
     # =========================================================================
     @classmethod
-    def build_auto_lookup_map(cls, view_callable: Optional[Any]) -> Dict[str, str]:
+    def build_auto_lookup_map(cls, view_callable: Any | None) -> dict[str, str]:
         """
         Step 03.1 - Inspects DRF ViewSets / Views to extract lookup_field and lookup_url_kwarg mappings.
         Maps URL kwarg (e.g., 'hash') -> Model Field (e.g., 'sha_256').
@@ -85,8 +86,8 @@ class PathConverterResolver:
         cls,
         instance: models.Model,
         param_name: str,
-        lookup_map: Optional[Dict[str, str]] = None,
-    ) -> Optional[Any]:
+        lookup_map: dict[str, str] | None = None,
+    ) -> Any | None:
         """
         Step 04.1 - Extracts parameter value from a model instance using exact field or DRF lookup mapping.
         Supports:
@@ -112,15 +113,15 @@ class PathConverterResolver:
     def resolve_params_for_route(
         cls,
         route: RouteMetadata,
-        explicit_params: Optional[Dict[str, Any]] = None,
+        explicit_params: dict[str, Any] | None = None,
         auto_generate_if_missing: bool = True,
-        lookup_map: Optional[Dict[str, str]] = None,
-    ) -> Tuple[Dict[str, Any], Optional[Any]]:
+        lookup_map: dict[str, str] | None = None,
+    ) -> tuple[dict[str, Any], Any | None]:
         """
         Step 05.1 - Resolves concrete values for required path parameters of a route.
         """
         with profiling_session():
-            resolved: Dict[str, Any] = dict(explicit_params or {})
+            resolved: dict[str, Any] = dict(explicit_params or {})
 
             if not route.has_path_params:
                 return resolved, None
@@ -185,8 +186,8 @@ class PathConverterResolver:
                     logger.error(f"Database operation failed during parameter resolution for {route.path}: {db_err}")
                 except SeedDataRequiredError:
                     raise
-                except Exception as err:
-                    logger.exception(f"Unexpected error during route parameter resolution for {route.path}: {err}")
+                except Exception:
+                    logger.exception(f"Unexpected error during route parameter resolution for {route.path}")
 
             # Step 05.6 - Validation & SeedDataRequiredError Handoff
             still_missing = [p.name for p in route.path_params if p.name not in resolved]
@@ -206,7 +207,7 @@ class PathConverterResolver:
     def render_concrete_url(
         cls,
         route: RouteMetadata,
-        resolved_params: Dict[str, Any],
+        resolved_params: dict[str, Any],
     ) -> str:
         """
         Step 06.1 - Renders executable URL using reverse() or regex pattern substitution fallback.
@@ -214,14 +215,14 @@ class PathConverterResolver:
         if route.view_name:
             try:
                 return reverse(route.view_name, kwargs=resolved_params)
-            except Exception:
-                pass
+            except NoReverseMatch:
+                logger.debug("Failed to reverse route %s with params %s", route.view_name, resolved_params)
 
         url = route.path
         for name, value in resolved_params.items():
             str_val = str(value)
             pattern = re.compile(fr"<(?:[^:]+:)?{name}>")
-            url = pattern.sub(lambda m: str_val, url)
+            url = pattern.sub(lambda m, val=str_val: val, url)
 
         return url
 
@@ -232,10 +233,10 @@ class PathConverterResolver:
     def build_executable_url(
         cls,
         route: RouteMetadata,
-        explicit_params: Optional[Dict[str, Any]] = None,
+        explicit_params: dict[str, Any] | None = None,
         auto_generate_if_missing: bool = True,
-        lookup_map: Optional[Dict[str, str]] = None,
-    ) -> Tuple[str, Dict[str, Any], Optional[Any]]:
+        lookup_map: dict[str, str] | None = None,
+    ) -> tuple[str, dict[str, Any], Any | None]:
         """
         Step 07.1 - Primary entry point: Resolves parameter dictionary and renders final concrete URL string.
         """

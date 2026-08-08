@@ -1,11 +1,13 @@
 import inspect
-import time
 import json
-from typing import Any, Callable, Dict, List, Optional
+import time
+from collections.abc import Callable
+from typing import Any
+
 from django.db import connection
 
-from dqs.core.analyzer import detect_n_plus_one, fingerprint
 from dqs.adapters.drf.types import ExecutionResult
+from dqs.core.analyzer import detect_n_plus_one, fingerprint
 
 """
 QueryInterceptor is a custom Context Manager. Its sole job is to attach directly to Django's database driver connection (django.db.connection) while a block of code runs. Every time SQL hits the database, it does three things:
@@ -21,7 +23,7 @@ class QueryInterceptor:
     capturing SQL, execution time, and dynamically tracing the origin back to application code.
     """
     def __init__(self):
-        self.captured_queries: List[Dict[str, Any]] = []
+        self.captured_queries: list[dict[str, Any]] = []
 
     def __enter__(self):
         self._hook = connection.execute_wrapper(self._wrapper)
@@ -31,7 +33,7 @@ class QueryInterceptor:
     def __exit__(self, exc_type, exc_value, traceback):
         self._hook.__exit__(exc_type, exc_value, traceback)
 
-    def _wrapper(self, execute: Callable, sql: str, params: Any, many: bool, context: Dict[str, Any]) -> Any:
+    def _wrapper(self, execute: Callable, sql: str, params: Any, many: bool, context: dict[str, Any]) -> Any:
         start_time = time.perf_counter()
         try:
             return execute(sql, params, many, context)
@@ -44,7 +46,7 @@ class QueryInterceptor:
                 "src_loc": source_loc,
             })
 
-    def _extract_source_location(self) -> Optional[str]:
+    def _extract_source_location(self) -> str | None:
         """Inspects active call frames to pinpoint the user file and line number triggering the query."""
         for frame_info in inspect.stack():
             filename = frame_info.filename
@@ -63,7 +65,7 @@ class QueryAnalysisEngine:
     """Processes captured SQL queries, detects N+1 issues, and formats ExecutionResults."""
 
     @staticmethod
-    def parse_response_body(response: Any) -> Optional[Any]:
+    def parse_response_body(response: Any) -> Any | None:
         """Extracts JSON/Dict payload safely from a Django or DRF Response object."""
         if hasattr(response, "data"):
             return response.data
@@ -82,13 +84,13 @@ class QueryAnalysisEngine:
         cls,
         route: str,
         status_code: int,
-        queries_captured: List[Dict[str, Any]],
+        queries_captured: list[dict[str, Any]],
         db_duration: float,
         total_duration: float,
         response_body: Any,
-        seeded_records_info: List[Dict[str, Any]],
-        side_effect_warnings: List[str],
-        relationships: Optional[Dict[str, str]] = None,
+        seeded_records_info: list[dict[str, Any]],
+        side_effect_warnings: list[str],
+        relationships: dict[str, str] | dict[str, dict[str, str]] | None = None
     ) -> ExecutionResult:
         """Formats raw intercepted queries and calculates N+1 performance metrics."""
         formatted_queries = [

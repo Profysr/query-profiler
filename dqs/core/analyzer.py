@@ -1,8 +1,10 @@
 from collections import defaultdict
-from typing import Any, Dict, List, Optional
+from typing import Any
+
 import sqlglot
 import sqlglot.expressions as exp
 
+logger = logging.getLogger("analyzer")
 # ==============================
 # Helper Functions
 # ==============================
@@ -76,8 +78,8 @@ def fingerprint(raw_sql: str) -> str:
 
 def suggest_fix(
     fp: str,
-    relationships: Optional[Dict[str, Dict[str, str]]] = None,
-    src_loc: Optional[str] = None,
+    relationships: dict[str, dict[str, str]] | None = None,
+    src_loc: str | None = None,
 ) -> str:
     """Generates a plain-English Django ORM optimization recommendation.
 
@@ -96,7 +98,7 @@ def suggest_fix(
         if tables:
             target_table = tables[0]
     except Exception:
-        pass
+        logger.debug("Could not suggest fix for query %s", fp)
 
     loc_prefix = f" at `{src_loc}`" if src_loc else ""
 
@@ -128,10 +130,10 @@ def suggest_fix(
 
 
 def detect_n_plus_one(
-    queries: List[Dict[str, Any]],
+    queries: list[dict[str, Any]],
     threshold: int = 3,
-    relationships: Optional[Dict[str, Dict[str, str]]] = None,
-) -> List[Dict[str, Any]]:
+    relationships: dict[str, str] | dict[str, dict[str, str]] | None = None,
+) -> list[dict[str, Any]]:
     """Groups captured query logs by fingerprint and flags threshold breaches."""
     groups = defaultdict(list)
     for q in queries:

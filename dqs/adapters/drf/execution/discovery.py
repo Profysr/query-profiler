@@ -1,12 +1,16 @@
 import inspect
 import logging
-import weakref
-from typing import Any, Dict, List, Optional
-from django.db.models.signals import post_save, pre_save, post_delete, pre_delete
-from dqs.core.targets import Target
+from typing import Any
+import importlib
+from django.conf import settings
 from django.apps import apps
-from dqs.adapters.drf.execution.schema_advisor import check_missing_indexes, check_pk_strategy
+
+from dqs.adapters.drf.execution.schema_advisor import (
+    check_missing_indexes,
+    check_pk_strategy,
+)
 from dqs.core.static_advisor import StaticASTAdvisor
+from dqs.core.targets import Target
 
 logger = logging.getLogger("dqs")
 
@@ -25,11 +29,11 @@ class DjangoTargetDiscovery:
     Discovers all execution targets in a Django project (URL routes, signal receivers, 
     and Celery tasks), unifying them into standardized Target records.
     """
-    def __init__(self, introspector_routes: Optional[List[Any]] = None):
+    def __init__(self, introspector_routes: list[Any] | None = None):
         self.introspector_routes = introspector_routes or []
 
-    def discover_all(self) -> List[Target]:
-        targets: List[Target] = []
+    def discover_all(self) -> list[Target]:
+        targets: list[Target] = []
 
         # 1. Map Introspected URL Routes into Targets
         # for route in self.introspector_routes:
@@ -140,7 +144,7 @@ class DjangoTargetDiscovery:
         
         return targets
 
-    def _discover_consumers(self) -> List[Target]:
+    def _discover_consumers(self) -> list[Target]:
         """
         Discovers Channels WebSocket consumers via the project's ASGI routing
         (settings.ASGI_APPLICATION -> ProtocolTypeRouter -> websocket URLRouter).
@@ -148,10 +152,8 @@ class DjangoTargetDiscovery:
         different trigger mechanism than RequestFactory/direct-call is needed for
         actual execution, which is explicitly v2.0+ scope.
         """
-        targets: List[Target] = []
+        targets: list[Target] = []
         try:
-            import importlib
-            from django.conf import settings
 
             asgi_path = getattr(settings, "ASGI_APPLICATION", None)
             if not asgi_path:
@@ -186,7 +188,7 @@ class DjangoTargetDiscovery:
 
         return targets
 
-    def _analyze_callable_statically(self, func: Any) -> List[Dict[str, Any]]:
+    def _analyze_callable_statically(self, func: Any) -> list[dict[str, Any]]:
         if not callable(func):
             return []
         try:
@@ -197,7 +199,7 @@ class DjangoTargetDiscovery:
         except (TypeError, OSError, Exception):
             return []
 
-    def _resolve_sender_model(self, sender_id: Optional[int]) -> Optional[str]:
+    def _resolve_sender_model(self, sender_id: int | None) -> str | None:
         """
         Django stores signal sender association as id(sender_class), not the class itself. Reverse-resolve it back to 'app_label.ModelName' by scanning installed models, this is what makes a signal actually
         triggerable later (we need to know which model to save/delete).

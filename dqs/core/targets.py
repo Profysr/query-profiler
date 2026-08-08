@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Literal, Dict, Any, List, Optional
+from typing import Any, Literal
 
 TargetKind = Literal["view", "signal", "task", "consumer", "static_only"]
 
@@ -8,5 +8,5 @@ class Target:
     id: str
     kind: TargetKind
     triggerable: bool
-    trigger_spec: Optional[Dict[str, Any]] = None
-    static_findings: List[Dict[str, Any]] = field(default_factory=list)
+    trigger_spec: dict[str, Any] | None = None
+    static_findings: list[dict[str, Any]] = field(default_factory=list)

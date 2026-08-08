@@ -5,7 +5,8 @@ Unlike static_advisor.py, this requires the Django app registry to be loaded
 (model classes must exist), but still requires NO live DB connection and NO
 code execution — models are just Python classes with metadata attached.
 """
-from typing import Any, Dict, List, Optional
+from typing import Any
+
 from django.apps import apps
 
 # PK field types considered "auto-increment integer" style — the case the
@@ -14,7 +15,7 @@ from django.apps import apps
 AUTO_INCREMENT_PK_TYPES = {"AutoField", "BigAutoField", "SmallAutoField"}
 
 
-def check_pk_strategy(model_path: Optional[str]) -> List[Dict[str, Any]]:
+def check_pk_strategy(model_path: str | None) -> list[dict[str, Any]]:
     """Flags models using auto-increment integer PKs, suggesting UUIDv7."""
     if not model_path:
         return []
@@ -41,7 +42,7 @@ def check_pk_strategy(model_path: Optional[str]) -> List[Dict[str, Any]]:
     return []
 
 
-def check_missing_indexes(model_path: Optional[str], queried_fields: List[str]) -> List[Dict[str, Any]]:
+def check_missing_indexes(model_path: str | None, queried_fields: list[str]) -> list[dict[str, Any]]:
     """
     Cross-references fields used in .filter()/.exclude()/.order_by() calls
     against the model's actual indexed fields (db_index=True, unique=True,

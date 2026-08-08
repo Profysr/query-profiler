@@ -11,7 +11,7 @@ inference for serializers/forms with guaranteed uniqueness.
 import inspect
 import logging
 import uuid
-from typing import Any, Dict, List, Optional, Type, Union
+from typing import Any, ClassVar
 
 from django.apps import apps
 from django.conf import settings
@@ -19,7 +19,7 @@ from django.db import models
 from model_bakery import baker
 from model_bakery.exceptions import ModelBakeryException
 
-from dqs.adapters.drf.router import SHADOW_DB_ALIAS, SEED_MIN_THRESHOLD, SEED_MAX_CAP
+from dqs.adapters.drf.router import SEED_MAX_CAP, SEED_MIN_THRESHOLD, SHADOW_DB_ALIAS
 from dqs.adapters.drf.types import SeedDataRequiredError
 
 logger = logging.getLogger("dqs.mock_generator")
@@ -34,7 +34,7 @@ class MockValueGenerator:
     Guarantees uniqueness via UUID tokens for DB seeding & JSON payloads.
     """
     @classmethod
-    def get_unique_value(cls, field_name: str, internal_type: str, max_length: Optional[int] = None) -> Any:
+    def get_unique_value(cls, field_name: str, internal_type: str, max_length: int | None = None) -> Any:
         uid = uuid.uuid4().hex[:6]
         fn_lower = field_name.lower()
 
@@ -89,7 +89,7 @@ class ModelBakeryGenerator:
     Encapsulates model mock data creation with constraint-safety, uniqueness guards,
     and validation recovery mechanisms.
     """
-    _sample_cache: Dict[str, List[models.Model]] = {}
+    _sample_cache: ClassVar[dict[str, list[models.Model]]] = {}
 
     @classmethod
     def _inspect_is_model_class(cls, val: Any) -> bool:
@@ -97,7 +97,7 @@ class ModelBakeryGenerator:
         return isinstance(val, type) and issubclass(val, models.Model)
 
     @classmethod
-    def _resolve_model(cls, model_or_path: Union[str, Type[models.Model]]) -> Optional[Type[models.Model]]:
+    def _resolve_model(cls, model_or_path: str | type[models.Model]) -> type[models.Model] | None:
         """Step 03.2 - Resolves string dot-paths ('app.Model') into concrete Django Model classes."""
         if isinstance(model_or_path, str):
             try:
@@ -116,8 +116,8 @@ class ModelBakeryGenerator:
     @classmethod
     def _sample_existing_fields(
         cls,
-        model_class: Type[models.Model],
-    ) -> Optional[Dict[str, Any]]:
+        model_class: type[models.Model],
+    ) -> dict[str, Any] | None:
         """
         Reads an existing DB record and returns its non-relational, non-unique field
         values as a template dict. This lets new mock records inherit realistic values
@@ -131,7 +131,7 @@ class ModelBakeryGenerator:
         if sample is None:
             return None
 
-        template: Dict[str, Any] = {}
+        template: dict[str, Any] = {}
         for f in model_class._meta.get_fields():
             # Skip relations, PKs, unique fields and auto-fields — those get fresh unique values
             if not hasattr(f, "name") or f.is_relation:
@@ -155,10 +155,10 @@ class ModelBakeryGenerator:
     @classmethod
     def ensure_capped_seeding(
         cls,
-        model_or_path: Union[str, Type[models.Model]],
+        model_or_path: str | type[models.Model],
         min_threshold: int = SEED_MIN_THRESHOLD,
         max_cap: int = SEED_MAX_CAP,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Ensures the shadow DB has enough baseline rows before profiling runs."""
         model_class = cls._resolve_model(model_or_path)
         if not model_class:
@@ -190,11 +190,11 @@ class ModelBakeryGenerator:
     @classmethod
     def generate(
         cls,
-        model_or_path: Union[str, Type[models.Model]],
+        model_or_path: str | type[models.Model],
         quantity: int = 1,
         commit: bool = True,
         **custom_fields: Any,
-    ) -> List[models.Model]:
+    ) -> list[models.Model]:
         """Main entry point for generating mock database records using model_bakery."""
         model_class = cls._resolve_model(model_or_path)
         if not model_class:
@@ -216,7 +216,7 @@ class ModelBakeryGenerator:
         base_fields.update(custom_fields)
 
         overrides = cls._build_uniqueness_overrides(model_class, quantity, base_fields)
-        instances: List[models.Model] = []
+        instances: list[models.Model] = []
 
         try:
             if commit:
@@ -254,10 +254,10 @@ class ModelBakeryGenerator:
     @classmethod
     def _build_uniqueness_overrides(
         cls,
-        model_class: Type[models.Model],
+        model_class: type[models.Model],
         quantity: int,
-        user_overrides: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        user_overrides: dict[str, Any],
+    ) -> dict[str, Any]:
         """Step 06.1 - Dynamically populates mock values for all unique/primary fields."""
         overrides = dict(user_overrides)
 
@@ -283,12 +283,12 @@ class ModelBakeryGenerator:
     @classmethod
     def _recovery_generate(
         cls,
-        model_class: Type[models.Model],
+        model_class: type[models.Model],
         quantity: int,
         commit: bool,
         primary_err: Exception,
-        overrides: Dict[str, Any],
-    ) -> List[models.Model]:
+        overrides: dict[str, Any],
+    ) -> list[models.Model]:
         """Secondary generation attempt forcing optional field generation and relation creation."""
         try:
             if commit:
@@ -311,11 +311,11 @@ class ModelBakeryGenerator:
     @classmethod
     def clone_user_records(
         cls,
-        model_class: Type[models.Model],
-        user_records: List[Dict[str, Any]],
-        serializer_cls: Optional[Any] = None,
+        model_class: type[models.Model],
+        user_records: list[dict[str, Any]],
+        serializer_cls: Any | None = None,
         target_quantity: int = 2,
-    ) -> List[models.Model]:
+    ) -> list[models.Model]:
         """
         Accepts valid JSON payloads provided by the user/agent, validates + saves them
         as base records via DRF Serializer or ORM, then clones them safely to satisfy target quantities.
@@ -323,8 +323,8 @@ class ModelBakeryGenerator:
         from django.db import transaction
 
         db_alias = SHADOW_DB_ALIAS if SHADOW_DB_ALIAS in settings.DATABASES else "default"
-        created_instances: List[models.Model] = []
-        errors: List[str] = []
+        created_instances: list[models.Model] = []
+        errors: list[str] = []
 
         # Step 08.1 - Phase 1: Validate & persist user-provided payloads
         with transaction.atomic(using=db_alias):
@@ -359,7 +359,7 @@ class ModelBakeryGenerator:
         for i in range(max(needed, 0)):
             base_obj = created_instances[i % len(created_instances)]
 
-            clone_fields: Dict[str, Any] = {}
+            clone_fields: dict[str, Any] = {}
             for f in model_class._meta.concrete_fields:
                 if getattr(f, "primary_key", False):
                     continue
@@ -397,7 +397,7 @@ class ModelBakeryGenerator:
 # Step 09 - Request Body Payload Inferrer Entry Point
 # =============================================================================
 
-def infer_request_body(view_func_or_cls: Any) -> Optional[Dict[str, Any]]:
+def infer_request_body(view_func_or_cls: Any) -> dict[str, Any] | None:
     """
     Inspects a view function or view class to determine expected input fields
     and generate a realistic mock request body dict with unique values.
@@ -423,12 +423,12 @@ def infer_request_body(view_func_or_cls: Any) -> Optional[Dict[str, Any]]:
 # Step 10 - Field Extraction & Traversal Loop
 # =============================================================================
 
-def infer_body_from_fields(class_or_instance: Any, is_form: bool = False) -> Dict[str, Any]:
+def infer_body_from_fields(class_or_instance: Any, is_form: bool = False) -> dict[str, Any]:
     """
     Unified function for inferring request body payload dictionaries from both
     DRF Serializers and Django Forms.
     """
-    payload: Dict[str, Any] = {}
+    payload: dict[str, Any] = {}
 
     try:
         instance = class_or_instance() if inspect.isclass(class_or_instance) else class_or_instance
@@ -454,7 +454,7 @@ def infer_body_from_fields(class_or_instance: Any, is_form: bool = False) -> Dic
 # Step 11 - View & Serializer Inspection Helpers
 # =============================================================================
 
-def _extract_view_class(view_func_or_cls: Any) -> Optional[Type]:
+def _extract_view_class(view_func_or_cls: Any) -> type | None:
     """Unwraps Django view functions, class-based views, or viewsets to find the target class."""
     if inspect.isclass(view_func_or_cls):
         return view_func_or_cls
@@ -464,7 +464,7 @@ def _extract_view_class(view_func_or_cls: Any) -> Optional[Type]:
     )
 
 
-def _extract_serializer_class(view_class: Type) -> Optional[Type]:
+def _extract_serializer_class(view_class: type) -> type | None:
     """Retrieves the serializer class from view attribute or .get_serializer_class()."""
     cls = getattr(view_class, "serializer_class", None)
     if cls and inspect.isclass(cls):

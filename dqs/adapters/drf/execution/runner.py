@@ -65,39 +65,32 @@ ELI5 PSEUDO-FORMAT FLOW MAP (How DjangoSandboxRunner works step-by-step):
 """
 import inspect
 import json
-import re
 import time
-import traceback
-from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from collections.abc import Callable
+from typing import Any
 
 from django.apps import apps
-from django.conf import settings
-from django.contrib.auth.models import AnonymousUser
-from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
-from django.urls import resolve, reverse
-from model_bakery import baker
+from django.db.models.signals import post_delete, post_save, pre_delete, pre_save
+from django.urls import resolve
 from rest_framework.response import Response
 from rest_framework.test import APIRequestFactory
 
-from dqs.core.analyzer import fingerprint, detect_n_plus_one, suggest_fix
+from dqs.adapters.drf.mocking.generator import ModelBakeryGenerator, infer_request_body
 from dqs.adapters.drf.routing.converters import PathConverterResolver
-from dqs.adapters.drf.types import RouteMetadata, SeedDataRequiredError
-from django.db.models.signals import post_save, pre_save, post_delete, pre_delete
+from dqs.adapters.drf.types import ExecutionResult, RouteMetadata, SeedDataRequiredError
 from dqs.core.static_advisor import StaticASTAdvisor
-from dqs.adapters.drf.mocking.generator import infer_request_body, ModelBakeryGenerator
-from dqs.adapters.drf.router import SHADOW_DB_ALIAS
-from .query_interceptor import QueryAnalysisEngine, QueryInterceptor
 from dqs.core.targets import Target
-from dqs.adapters.drf.types import ExecutionResult
+from dqs.adapters.drf.database.db_manager import ShadowDatabaseManager
+from .query_interceptor import QueryAnalysisEngine, QueryInterceptor
+from dqs.adapters.drf.router import DQSRouter
 
 # dqs/analysis/ast_analyzer.py
 class StaticAnalysisService:
     """Inspects target view source code AST to detect blocking calls and external side effects."""
 
     @staticmethod
-    def detect_side_effects(view_func: Any) -> List[str]:
+    def detect_side_effects(view_func: Any) -> list[str]:
         """Safely scans source code AST without executing the callable."""
         warnings = []
         try:
@@ -126,10 +119,10 @@ class RequestSpecBuilder:
         method: str,
         resolved_path: str,
         route_meta: Any,
-        resolved_params: Dict[str, Any],
-        query_params: Optional[Dict[str, Any]] = None,
-        data: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        resolved_params: dict[str, Any],
+        query_params: dict[str, Any] | None = None,
+        data: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         path_params_spec = [
             {
                 "name": p.name,
@@ -251,6 +244,18 @@ class DjangoSandboxRunner:
     Orchestrates isolated DRF request execution, mock data seeding, SQL query interception,
     and performance profiling.
     """
+    # =========================================================================
+    # Step 0.1 - Deferred Model Helpers
+    # =========================================================================
+    def _get_user(self, user: Any | None = None) -> Any:
+        """
+        Lazily imports and returns AnonymousUser if no explicit user is provided.
+        """
+        if user is not None:
+            return user
+        from django.contrib.auth.models import AnonymousUser
+
+        return AnonymousUser()
 
     # =========================================================================
     # Step 02 - Initialization & Settings Pre-check Verification
@@ -271,9 +276,9 @@ class DjangoSandboxRunner:
         self,
         func: Callable,
         *args,
-        setup: Optional[Callable[[], Any]] = None,
+        setup: Callable[[], Any] | None = None,
         **kwargs,
-    ) -> Tuple[Any, List[Dict[str, Any]], float, Any]:
+    ) -> tuple[Any, list[dict[str, Any]], float, Any]:
         """
         Executes any callable inside a query-interception boundary.
         Uses shadow DB routing when active, or atomic savepoint rollback on default DB.
@@ -317,9 +322,9 @@ class DjangoSandboxRunner:
     def resolve_path_step(
         self,
         route_meta: Any,
-        explicit_params: Optional[Dict[str, Any]] = None,
-        lookup_map: Optional[Dict[str, str]] = None,
-    ) -> Dict[str, Any]:
+        explicit_params: dict[str, Any] | None = None,
+        lookup_map: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         """Resolves concrete URL paths and populates dynamic path parameters."""
         concrete_url, resolved_params, created_instance = PathConverterResolver.build_executable_url(
             route=route_meta,
@@ -341,14 +346,14 @@ class DjangoSandboxRunner:
         self,
         concrete_url: str,
         method: str = "GET",
-        user: Optional[Any] = None,
-    ) -> Dict[str, Any]:
+        user: Any | None = None,
+    ) -> dict[str, Any]:
         """Issues an un-intercepted request to verify route accessibility and status code."""
         try:
             resolved_match = resolve(concrete_url)
             request_func = getattr(self.factory, method.lower(), self.factory.get)
             request = request_func(concrete_url)
-            request.user = user if user is not None else AnonymousUser()
+            request.user = self._get_user(user)
             request.resolver_match = resolved_match
 
             response = resolved_match.func(request, *resolved_match.args, **resolved_match.kwargs)
@@ -361,7 +366,7 @@ class DjangoSandboxRunner:
     # =========================================================================
     # Step 06 - Pipeline Entry 3: Mock Resource Seeding
     # =========================================================================
-    def seed_resource_step(self, target_model: str, seed_count: int = 1) -> Dict[str, Any]:
+    def seed_resource_step(self, target_model: str, seed_count: int = 1) -> dict[str, Any]:
         """Seeds mock data records safely using ModelBakeryGenerator."""
         try:
             instances = ModelBakeryGenerator.generate(target_model, quantity=seed_count, commit=True)
@@ -383,13 +388,13 @@ class DjangoSandboxRunner:
         self,
         url_name_or_path: str,
         method: str = "GET",
-        path_params: Optional[Dict[str, Any]] = None,
-        query_params: Optional[Dict[str, Any]] = None,
-        data: Optional[Dict[str, Any]] = None,
-        user: Optional[Any] = None,
-        relationships: Optional[Dict[str, str]] = None,
+        path_params: dict[str, Any] | None = None,
+        query_params: dict[str, Any] | None = None,
+        data: dict[str, Any] | None = None,
+        user: Any | None = None,
+        relationships: dict[str, str] | None = None,
         seed_count: int = 0,
-        target_model: Optional[str] = None,
+        target_model: str | None = None,
         content_type: str = "application/json",
     ) -> ExecutionResult:
         """Executes a target endpoint within an isolated sandbox and returns metrics."""
@@ -408,9 +413,7 @@ class DjangoSandboxRunner:
             # Step 07.1 - Ensure minimum threshold model seeding
             if target_model:
                 try:
-                    seed_meta = ModelBakeryGenerator.ensure_capped_seeding(
-                        target_model, min_threshold=SEED_MIN_THRESHOLD, max_cap=SEED_MAX_CAP
-                    )
+                    seed_meta = ModelBakeryGenerator.ensure_capped_seeding(target_model)
                     if seed_meta.get("seeded_count", 0) > 0:
                         seeded_records_info = seed_meta.get("instances", [])
                         seed_count = 0
@@ -466,7 +469,7 @@ class DjangoSandboxRunner:
                 return ExecutionResult(
                     route=resolved_path,
                     status_code=404,
-                    error=f"Route resolution failed: {str(e)}",
+                    error=f"Route resolution failed: {e!s}",
                     request_spec=request_spec,
                 )
 
@@ -495,7 +498,7 @@ class DjangoSandboxRunner:
                     else:
                         request = request_func(resolved_path, data=query_params if method == "GET" else (request_data or {}))
 
-                    request.user = user if user is not None else AnonymousUser()
+                    request.user = self._get_user(user)
                     request.resolver_match = resolved_match
 
                     response = resolved_match.func(request, *resolved_match.args, **resolved_match.kwargs)
@@ -518,7 +521,7 @@ class DjangoSandboxRunner:
                 return ExecutionResult(
                     route=resolved_path,
                     status_code=500,
-                    error=f"Exception raised inside sandbox execution: {str(e)}",
+                    error=f"Exception raised inside sandbox execution: {e!s}",
                     side_effect_warnings=side_effect_warnings,
                 )
 

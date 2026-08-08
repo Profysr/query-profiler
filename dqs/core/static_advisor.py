@@ -1,18 +1,18 @@
 import ast
-from typing import Any, Dict, Set, List, Optional
+from typing import Any
 
 """
 It allows DQS to inspect code paths—even ones without URLs, like signal handlers or background jobs—and flag dangerous patterns (like DB queries inside loops or synchronous network requests) before anything is executed.
 """
 
 # 1. Externalized Rule Sets (O(1) Set Lookups)
-DJANGO_ORM_METHODS: Set[str] = {
+DJANGO_ORM_METHODS: set[str] = {
     "get", "filter", "exclude", "all", "first", "last",
     "create", "update", "delete", "count", "exists",
     "select_related", "prefetch_related", "values", "values_list"
 }
 
-BLOCKING_CALL_PREFIXES: Set[str] = {
+BLOCKING_CALL_PREFIXES: set[str] = {
     "requests.get", "requests.post", "requests.put", "requests.delete", "requests.patch",
     "urllib.request", "smtplib.SMTP", "time.sleep"
 }
@@ -25,19 +25,19 @@ class StaticASTAdvisor(ast.NodeVisitor):
     def __init__(self, source_code: str, filename: str = "<string>"):
         self.source_code = source_code
         self.filename = filename
-        self.findings: List[Dict[str, Any]] = []
+        self.findings: list[dict[str, Any]] = []
         self._loop_depth = 0
-        self.import_map: Dict[str, str] = {}
-        self.queried_fields: List[str] = []
+        self.import_map: dict[str, str] = {}
+        self.queried_fields: list[str] = []
 
-    def run(self) -> List[Dict[str, Any]]:
+    def run(self) -> list[dict[str, Any]]:
         try:
             tree = ast.parse(self.source_code, filename=self.filename)
             self.visit(tree)
         except Exception as e:
             self.findings.append({
                 "type": "AST_PARSE_ERROR",
-                "message": f"Could not parse source code: {str(e)}",
+                "message": f"Could not parse source code: {e!s}",
                 "line": 0,
             })
         return self.findings
