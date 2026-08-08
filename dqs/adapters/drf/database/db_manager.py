@@ -4,7 +4,6 @@ from typing import ClassVar
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.core.management import call_command
-
 from dqs.adapters.drf.router import SHADOW_DB_ALIAS
 
 logger = logging.getLogger("dqs.runner")
@@ -15,6 +14,15 @@ class ShadowDatabaseManager:
     _validated: ClassVar[bool] = False
     ROUTER_PATH: ClassVar[str] = "dqs.adapters.drf.router.DQSRouter"
 
+    @classmethod
+    def ensure_initialized(cls) -> None:
+        """
+        Validates shadow database configuration and executes pending migrations
+        to ensure the shadow DB schema is up to date prior to runner execution.
+        """
+        cls.validate_configuration()
+        cls.run_migrations()
+    
     @classmethod
     def validate_configuration(cls) -> None:
         """

@@ -16,8 +16,6 @@ from typing import Any, ClassVar
 from django.apps import apps
 from django.conf import settings
 from django.db import models
-from model_bakery import baker
-from model_bakery.exceptions import ModelBakeryException
 
 from dqs.adapters.drf.router import SEED_MAX_CAP, SEED_MIN_THRESHOLD, SHADOW_DB_ALIAS
 from dqs.adapters.drf.types import SeedDataRequiredError
@@ -196,6 +194,7 @@ class ModelBakeryGenerator:
         **custom_fields: Any,
     ) -> list[models.Model]:
         """Main entry point for generating mock database records using model_bakery."""
+
         model_class = cls._resolve_model(model_or_path)
         if not model_class:
             model_str = model_or_path if isinstance(model_or_path, str) else str(model_or_path)
@@ -210,6 +209,10 @@ class ModelBakeryGenerator:
         if not commit and model_key in cls._sample_cache and len(cls._sample_cache[model_key]) >= quantity:
             return cls._sample_cache[model_key][:quantity]
 
+        # Determine which DB to seed into: shadow DB when configured, else default.
+        # This must match the DB the view will read from during the profiling session.
+        db_alias = SHADOW_DB_ALIAS if SHADOW_DB_ALIAS in settings.DATABASES else "default"
+
         # Record-aware seeding: sample existing record baseline, then layer user overrides
         existing_template = cls._sample_existing_fields(model_class)
         base_fields = dict(existing_template or {})
@@ -218,9 +221,12 @@ class ModelBakeryGenerator:
         overrides = cls._build_uniqueness_overrides(model_class, quantity, base_fields)
         instances: list[models.Model] = []
 
+        from model_bakery import baker
+        from model_bakery.exceptions import ModelBakeryException
+
         try:
             if commit:
-                res = baker.make(model_class, _quantity=quantity, **overrides)
+                res = baker.make(model_class, _quantity=quantity, _using=db_alias, **overrides)
             else:
                 res = baker.prepare(model_class, _quantity=quantity, **overrides)
 
@@ -236,6 +242,7 @@ class ModelBakeryGenerator:
                 model_class=model_class,
                 quantity=quantity,
                 commit=commit,
+                db_alias=db_alias,
                 primary_err=primary_err,
                 overrides=overrides,
             )
@@ -286,15 +293,31 @@ class ModelBakeryGenerator:
         model_class: type[models.Model],
         quantity: int,
         commit: bool,
+        db_alias: str,
         primary_err: Exception,
         overrides: dict[str, Any],
     ) -> list[models.Model]:
         """Secondary generation attempt forcing optional field generation and relation creation."""
+        from model_bakery import baker
+
         try:
             if commit:
-                results = baker.make(model_class, _quantity=quantity, _fill_optional=True, _save_related=True, **overrides)
+                results = baker.make(
+                    model_class,
+                    _quantity=quantity,
+                    _fill_optional=True,
+                    _save_related=True,
+                    _using=db_alias,
+                    **overrides,
+                )
             else:
-                results = baker.prepare(model_class, _quantity=quantity, _fill_optional=True, _save_related=True, **overrides)
+                results = baker.prepare(
+                    model_class,
+                    _quantity=quantity,
+                    _fill_optional=True,
+                    _save_related=True,
+                    **overrides,
+                )
 
             return results if isinstance(results, list) else [results]
 

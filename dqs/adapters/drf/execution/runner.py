@@ -254,7 +254,6 @@ class DjangoSandboxRunner:
         if user is not None:
             return user
         from django.contrib.auth.models import AnonymousUser
-
         return AnonymousUser()
 
     # =========================================================================

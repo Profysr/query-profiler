@@ -94,7 +94,7 @@ class DjangoIntrospector:
             route = str(pattern_obj) if pattern_obj else ""
 
         combined = f"{prefix}/{route}".replace("//", "/")
-        return "/" + combined.strip("/")
+        return "/" + combined.lstrip("/")
 
     # =========================================================================
     # Step 05 - Multi-Strategy Model Discovery Engine

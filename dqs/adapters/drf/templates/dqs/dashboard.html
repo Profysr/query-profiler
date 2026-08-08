@@ -764,8 +764,13 @@
           body: JSON.stringify(payload),
         });
     
-        if (!res.ok && res.status === 403) {
-          renderResult({ error: 'Access denied. Da Profiler requires DEBUG=True.', status_code: 403 });
+        if (!res.ok) {
+          let errorMsg = `Request failed with status ${res.status}.`;
+          try {
+            const errBody = await res.json();
+            if (errBody && errBody.error) errorMsg = errBody.error;
+          } catch (_) { /* non-JSON body, keep default */ }
+          renderResult({ error: errorMsg, status_code: res.status });
           return;
         }
     
