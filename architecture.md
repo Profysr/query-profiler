@@ -610,3 +610,17 @@ python manage.py migrate --database=dqs_shadow
 | **Interception** | DB queries | `QueryInterceptor` | Queries with src_loc |
 | **Analysis** | Captured queries | `QueryAnalysisEngine` + `analyzer.py` | N+1 flags + ORM fixes |
 | **Result** | All above | `ExecutionResult` | Structured profiling report |
+
+---
+
+## 10. Complete Flow Diagrams
+
+For detailed visual flow diagrams covering:
+- Route discovery & dashboard loading
+- Complete profiling execution (button click to results)
+- Mock data seeding decision tree
+- Query interception & N+1 detection
+- High-level component interactions
+- Simplified flow summary
+
+See **[Flow Diagrams](./docs/flow-diagrams.md)**.

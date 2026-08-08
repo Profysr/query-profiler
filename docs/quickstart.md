@@ -48,7 +48,21 @@ DATABASE_ROUTERS = [
 > [!IMPORTANT]
 > **Safety Guard**: Da Profiler requires `DEBUG = True` in your settings to protect production environments from running sandbox simulations.
 >
-> **Shadow Database Setup**: Configure a `dqs_shadow` entry in `DATABASES` matching your engine and run migrations:
+> **Shadow Database Setup**: Configure a `dqs_shadow` entry in `DATABASES` matching your engine
+> ```bash
+>   DATABASES = {
+>    'default': {
+>        'ENGINE': 'django.db.backends.sqlite3',
+>        'NAME': BASE_DIR / 'db.sqlite3',
+>    },
+>    # ✅ Required by Da Profiler: shadow database for isolated profiling. Ensure the db name should match dqs_shadow
+>    'dqs_shadow': {
+>        'ENGINE': 'django.db.backends.sqlite3',
+>        'NAME': BASE_DIR / 'dqs_shadow.sqlite3',
+>    },
+> }
+> ```
+> and run migrations:
 > ```bash
 > python manage.py migrate --database=dqs_shadow
 > ```

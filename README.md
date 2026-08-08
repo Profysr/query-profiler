@@ -355,6 +355,7 @@ pytest -m django
 ## 📚 Project Documentation
 
 - 📄 [`ARCHITECTURE.md`](./ARCHITECTURE.md) — System design, sequence flows, and component breakdown.
+- 🔄 [`FLOW DIAGRAMS`](./docs/flow-diagrams.md) — Complete visual flow diagrams (route discovery, profiling execution, mock seeding, query interception).
 - 📋 [`CHANGELOG.md`](./CHANGELOG.md) — Detailed version history, releases, and architectural decisions.
 - 🗺️ [`ROADMAP.md`](./ROADMAP.md) — Development milestones, planned adapters, and feature timelines.
 - 🤝 [`CONTRIBUTING.md`](./CONTRIBUTING.md) — Contribution guidelines, dev setup, and commit standards.

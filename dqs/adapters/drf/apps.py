@@ -1,5 +1,6 @@
 # dqs/adapters/drf/apps.py
 from pathlib import Path
+
 from django.apps import AppConfig
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured

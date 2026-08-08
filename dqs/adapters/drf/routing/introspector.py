@@ -17,6 +17,7 @@ from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.urls import URLPattern, URLResolver, get_resolver
 from django.urls.resolvers import RegexPattern, RoutePattern
+
 from dqs.adapters.drf.routing.converters import PathConverterResolver
 from dqs.adapters.drf.types import PathParam, RouteMetadata
 

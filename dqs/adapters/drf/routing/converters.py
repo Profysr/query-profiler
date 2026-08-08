@@ -22,8 +22,9 @@ from django.conf import settings
 from django.db import DatabaseError as DjangoDatabaseError
 from django.db import models
 from django.urls import URLPattern, reverse
-from django.urls.resolvers import RoutePattern
 from django.urls.exceptions import NoReverseMatch
+from django.urls.resolvers import RoutePattern
+
 from dqs.adapters.drf.mocking.generator import ModelBakeryGenerator
 from dqs.adapters.drf.router import SHADOW_DB_ALIAS, profiling_session
 from dqs.adapters.drf.types import PathParam, RouteMetadata, SeedDataRequiredError

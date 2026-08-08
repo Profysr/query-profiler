@@ -1,9 +1,10 @@
+import importlib
 import inspect
 import logging
 from typing import Any
-import importlib
-from django.conf import settings
+
 from django.apps import apps
+from django.conf import settings
 
 from dqs.adapters.drf.execution.schema_advisor import (
     check_missing_indexes,

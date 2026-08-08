@@ -4,6 +4,7 @@ from typing import ClassVar
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.core.management import call_command
+
 from dqs.adapters.drf.router import SHADOW_DB_ALIAS
 
 logger = logging.getLogger("dqs.runner")
