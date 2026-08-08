@@ -42,6 +42,8 @@ class ExecutionResult:
     response_body: Any | None = None
     seeded_records: list[dict[str, Any]] = field(default_factory=list)
     request_spec: dict[str, Any] | None = None
+    process_log: list[dict[str, Any]] = field(default_factory=list)
+    process_log_summary: str = ""
 
 
 class SeedDataRequiredError(Exception):

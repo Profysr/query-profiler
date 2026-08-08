@@ -3,65 +3,16 @@
 ELI5 PSEUDO-FORMAT FLOW MAP (How DjangoSandboxRunner works step-by-step):
 =============================================================================
 execute_isolated()
- └── 1. Resolve URL & Method [Finds matching route and sets up request factory]
- └── 2. Scan Side Effects [Checks source code for external risks like emails/tasks]
- └── 3. Open Atomic Transaction & Savepoint [Ensures changes can be wiped clean]
-      └── 4. Seed Mock Data (Optional) [Populates fake records using model_bakery]
-      └── 5. Construct & Run Request [Executes view, capturing queries & stack traces]
-      └── 6. Rollback Transaction [Instantly reverts all database modifications]
- └── 7. Analyze Queries [Detects N+1 bottlenecks using SQL fingerprints and locations]
+  └── 1. Initialize & Validate Settings [Shadow DB, Router, Migrations]
+  └── 2. Ensure Baseline Seeding [Seed target model up to cap if empty]
+  └── 3. Resolve Path Parameters [Find existing record or auto-generate mock]
+  └── 4. Build Request Spec [Validate all params resolved]
+  └── 5. Resolve View Callable [Match URL to view function]
+  └── 6. Static Side-Effect Analysis [AST scan for blocking calls]
+  └── 7. Execute in Sandbox [Savepoint + QueryInterceptor + RequestFactory]
+  └── 8. Rollback or Persist [Savepoint rollback (default) or keep (shadow)]
+  └── 9. Analyze Queries [Fingerprint, detect N+1, suggest fixes]
 =============================================================================
-"""
-
-"""
-=============================================================================
-ELI5 PSEUDO-FORMAT FLOW MAP (How DjangoSandboxRunner works step-by-step):
-=============================================================================
-{
-  "route": "/api/books/",
-  "status_code": 200,
-  "metrics": {
-    "total_time_ms": 14.25,
-    "db_time_ms": 4.12,
-    "total_queries": 4,
-    "unique_fingerprints": 2,
-    "n_plus_one_detected": true
-  },
-  "queries": [
-    {
-      "sql": "SELECT \"library_book\".\"id\", \"library_book\".\"title\" FROM \"library_book\"",
-      "fingerprint": "SELECT T0.id, T0.title FROM library_book AS T0",
-      "time_ms": 1.2,
-      "src_loc": "api/views.py:28"
-    },
-    {
-      "sql": "SELECT \"library_author\".\"id\", \"library_author\".\"name\" FROM \"library_author\" WHERE \"library_author\".\"id\" = 1",
-      "fingerprint": "SELECT T0.id, T0.name FROM library_author AS T0 WHERE T0.id = ?",
-      "time_ms": 0.9,
-      "src_loc": "api/serializers.py:15"
-    }
-  ],
-  "analysis": [
-    {
-      "fingerprint": "SELECT T0.id, T0.name FROM library_author AS T0 WHERE T0.id = ?",
-      "count": 3,
-      "src_loc": "api/serializers.py:15",
-      "suggestion": "Potential N+1 detected on table 'library_author' at `api/serializers.py:15`. Fix by appending `.select_related('author')` to your base queryset.",
-      "sample_queries": [
-        "SELECT \"library_author\".\"id\", \"library_author\".\"name\" FROM \"library_author\" WHERE \"library_author\".\"id\" = 1",
-        "SELECT \"library_author\".\"id\", \"library_author\".\"name\" FROM \"library_author\" WHERE \"library_author\".\"id\" = 2"
-      ]
-    }
-  ],
-  "error": null,
-  "side_effect_warnings": [],
-  "response_body": [
-    {"id": 1, "title": "Django Deep Dive", "author": {"id": 1, "name": "Alice"}}
-  ],
-  "seeded_records": [
-    {"pk": 1, "__str__": "Book object (1)"}
-  ]
-}
 """
 import inspect
 import json
@@ -78,6 +29,7 @@ from rest_framework.test import APIRequestFactory
 
 from dqs.adapters.drf.database.db_manager import ShadowDatabaseManager
 from dqs.adapters.drf.mocking.generator import ModelBakeryGenerator, infer_request_body
+from dqs.adapters.drf.process_log import ProcessLogger
 from dqs.adapters.drf.router import DQSRouter
 from dqs.adapters.drf.routing.converters import PathConverterResolver
 from dqs.adapters.drf.types import ExecutionResult, RouteMetadata, SeedDataRequiredError
@@ -111,6 +63,7 @@ class StaticAnalysisService:
 
         return list(set(warnings))
 
+
 # dqs/builders/request_spec_builder.py
 class RequestSpecBuilder:
     """Builds Postman-style request contracts for MCP Agents and UI Clients."""
@@ -143,6 +96,7 @@ class RequestSpecBuilder:
             "query_params": query_params or {},
             "body": data,
         }
+
 
 # dqs/targets/target_executor.py
 class TargetExecutor:
@@ -183,7 +137,7 @@ class TargetExecutor:
             if signal_name in ("post_delete", "pre_delete"):
                 instance.delete()
                 return {"action": "delete", "model": sender_model_path}
-            
+
             return {"action": "save", "model": sender_model_path, "pk": instance.pk}
 
         result, queries_captured, db_duration, _ = self.profile_callable(_fire_signal)
@@ -231,6 +185,7 @@ class TargetExecutor:
             side_effect_warnings=[],
         )
 
+
 """
 Django Sandbox Runner (dqs/sandbox_runner.py)
 =============================================
@@ -246,6 +201,7 @@ class DjangoSandboxRunner:
     Orchestrates isolated DRF request execution, mock data seeding, SQL query interception,
     and performance profiling.
     """
+
     # =========================================================================
     # Step 0.1 - Deferred Model Helpers
     # =========================================================================
@@ -399,9 +355,15 @@ class DjangoSandboxRunner:
         content_type: str = "application/json",
     ) -> ExecutionResult:
         """Executes a target endpoint within an isolated sandbox and returns metrics."""
+        ProcessLogger.clear()
+        overall_start = time.perf_counter()
+
         method = method.upper()
         path_params = path_params or {}
         query_params = query_params or {}
+
+        ProcessLogger.log("init", f"Starting profiling session for {method} {url_name_or_path}", 
+                         method=method, route=url_name_or_path)
 
         if method not in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
             return ExecutionResult(route=url_name_or_path, status_code=400, error=f"Invalid HTTP method: {method}")
@@ -411,33 +373,66 @@ class DjangoSandboxRunner:
         with profiling_session():
             seeded_records_info = []
 
-            # Step 07.1 - Ensure minimum threshold model seeding
+            # Step 07.1 - Ensure minimum threshold model seeding (baseline)
             if target_model:
-                try:
-                    seed_meta = ModelBakeryGenerator.ensure_capped_seeding(target_model)
-                    if seed_meta.get("seeded_count", 0) > 0:
-                        seeded_records_info = seed_meta.get("instances", [])
-                        seed_count = 0
-                except SeedDataRequiredError as seed_err:
-                    return ExecutionResult(route=url_name_or_path, status_code=400, error=str(seed_err))
+                with ProcessLogger.timed_step("baseline_seeding", f"Ensuring baseline data for {target_model}"):
+                    try:
+                        seed_meta = ModelBakeryGenerator.ensure_capped_seeding(target_model)
+                        seeded = seed_meta.get("seeded_count", 0)
+                        if seeded > 0:
+                            seeded_records_info = seed_meta.get("instances", [])
+                            ProcessLogger.log("baseline_seeding", f"Seeded {seeded} baseline records for {target_model}", 
+                                            seeded_count=seeded, model=target_model)
+                            seed_count = 0  # Reset since baseline handled it
+                        else:
+                            ProcessLogger.log("baseline_seeding", f"Baseline already satisfied for {target_model} ({seed_meta.get('initial_count', 0)} existing)", 
+                                            model=target_model, existing_count=seed_meta.get('initial_count', 0))
+                    except SeedDataRequiredError as seed_err:
+                        ProcessLogger.log_error("baseline_seeding", f"Failed to seed baseline for {target_model}", str(seed_err))
+                        return ExecutionResult(route=url_name_or_path, status_code=400, error=str(seed_err))
 
             # Step 07.2 - Resolve path converters and parameters
-            route_meta = RouteMetadata(
-                path=url_name_or_path,
-                methods=[method],
-                view_name=url_name_or_path if not url_name_or_path.startswith("/") else "",
-                view_type="DRF_APIView",
-                target_model=target_model,
-            )
+            # First, introspect the route to get path_params and view_callable
+            with ProcessLogger.timed_step("route_introspection", f"Introspecting route {url_name_or_path}"):
+                from dqs.adapters.drf.routing.introspector import DjangoIntrospector
+                introspector = DjangoIntrospector()
+                routes = introspector.list_all_routes()
+                matched_route = None
+                for r in routes:
+                    if r.path == url_name_or_path or r.view_name == url_name_or_path:
+                        matched_route = r
+                        break
+                
+                if matched_route:
+                    route_meta = matched_route
+                    ProcessLogger.log("route_introspection", f"Found route: {route_meta.path} (type: {route_meta.view_type})", 
+                                    path=route_meta.path, view_type=route_meta.view_type, 
+                                    has_params=route_meta.has_path_params, target_model=route_meta.target_model)
+                else:
+                    # Fallback: create minimal RouteMetadata
+                    route_meta = RouteMetadata(
+                        path=url_name_or_path,
+                        methods=[method],
+                        view_name=url_name_or_path if not url_name_or_path.startswith("/") else "",
+                        view_type="DRF_APIView",
+                        target_model=target_model,
+                    )
+                    ProcessLogger.log("route_introspection", "Route not in introspector, using fallback metadata", 
+                                    path=url_name_or_path, target_model=target_model)
 
-            try:
-                resolved_path, resolved_params, _ = PathConverterResolver.build_executable_url(
-                    route=route_meta,
-                    explicit_params=path_params,
-                    auto_generate_if_missing=True,
-                )
-            except SeedDataRequiredError as seed_err:
-                return ExecutionResult(route=url_name_or_path, status_code=400, error=str(seed_err))
+            with ProcessLogger.timed_step("param_resolution", "Resolving path parameters"):
+                try:
+                    resolved_path, resolved_params, created_instance = PathConverterResolver.build_executable_url(
+                        route=route_meta,
+                        explicit_params=path_params,
+                        auto_generate_if_missing=True,
+                    )
+                    ProcessLogger.log("param_resolution", f"Resolved URL: {resolved_path}", 
+                                    resolved_url=resolved_path, params=resolved_params,
+                                    created_mock=created_instance is not None)
+                except SeedDataRequiredError as seed_err:
+                    ProcessLogger.log_error("param_resolution", "Could not resolve path parameters", str(seed_err))
+                    return ExecutionResult(route=url_name_or_path, status_code=400, error=str(seed_err))
 
             # Step 07.3 - Build structured Request Spec contract
             request_spec = RequestSpecBuilder.build(
@@ -453,6 +448,8 @@ class DjangoSandboxRunner:
             # Step 07.4 - Check for unresolved path parameters (Handover Rule)
             unresolved_names = [p["name"] for p in request_spec["path_params"] if p["status"] == "UNRESOLVED"]
             if unresolved_names:
+                ProcessLogger.log_error("param_validation", f"Unresolved parameters: {unresolved_names}", 
+                                      f"Missing: {', '.join(unresolved_names)}")
                 return ExecutionResult(
                     route=url_name_or_path,
                     status_code=400,
@@ -464,35 +461,52 @@ class DjangoSandboxRunner:
                 )
 
             # Step 07.5 - Match URL pattern callable
-            try:
-                resolved_match = resolve(resolved_path)
-            except Exception as e:
-                return ExecutionResult(
-                    route=resolved_path,
-                    status_code=404,
-                    error=f"Route resolution failed: {e!s}",
-                    request_spec=request_spec,
-                )
+            with ProcessLogger.timed_step("view_resolution", f"Resolving view for {resolved_path}"):
+                try:
+                    resolved_match = resolve(resolved_path)
+                    view_func = resolved_match.func
+                    ProcessLogger.log("view_resolution", f"Resolved to view: {view_func}", 
+                                    view=str(view_func))
+                except Exception as e:
+                    ProcessLogger.log_error("view_resolution", "Failed to resolve URL", str(e))
+                    return ExecutionResult(
+                        route=resolved_path,
+                        status_code=404,
+                        error=f"Route resolution failed: {e!s}",
+                        request_spec=request_spec,
+                    )
 
             request_func = getattr(self.factory, method.lower(), None)
             if not request_func:
                 return ExecutionResult(route=resolved_path, status_code=405, error=f"Unsupported method: {method}")
 
             # Step 07.6 - AST static side-effect analysis
-            side_effect_warnings = StaticAnalysisService.detect_side_effects(resolved_match.func)
+            with ProcessLogger.timed_step("side_effect_analysis", "Scanning view for blocking calls"):
+                side_effect_warnings = StaticAnalysisService.detect_side_effects(view_func)
+                if side_effect_warnings:
+                    ProcessLogger.log("side_effect_analysis", f"Found {len(side_effect_warnings)} warnings", 
+                                    warnings=side_effect_warnings)
+                else:
+                    ProcessLogger.log("side_effect_analysis", "No blocking calls detected")
 
             start_time = time.perf_counter()
             try:
                 def _seed():
                     if seed_count > 0 and target_model:
-                        created = ModelBakeryGenerator.generate(target_model, quantity=seed_count, commit=True)
-                        return [{"pk": obj.pk, "__str__": str(obj)} for obj in created]
+                        with ProcessLogger.timed_step("additional_seeding", f"Seeding {seed_count} additional records for {target_model}"):
+                            created = ModelBakeryGenerator.generate(target_model, quantity=seed_count, commit=True)
+                            return [{"pk": obj.pk, "__str__": str(obj)} for obj in created]
                     return []
 
                 def _sandbox_execution():
                     request_data = data
                     if method in {"POST", "PUT", "PATCH"} and request_data is None:
-                        request_data = infer_request_body(resolved_match.func)
+                        with ProcessLogger.timed_step("body_inference", "Inferring request body from serializer"):
+                            request_data = infer_request_body(view_func)
+                            if request_data:
+                                ProcessLogger.log("body_inference", f"Inferred body with keys: {list(request_data.keys())}")
+                            else:
+                                ProcessLogger.log("body_inference", "Could not infer request body")
 
                     if method in {"POST", "PUT", "PATCH"} and request_data is not None:
                         request = request_func(resolved_path, data=json.dumps(request_data), content_type=content_type)
@@ -502,7 +516,7 @@ class DjangoSandboxRunner:
                     request.user = self._get_user(user)
                     request.resolver_match = resolved_match
 
-                    response = resolved_match.func(request, *resolved_match.args, **resolved_match.kwargs)
+                    response = view_func(request, *resolved_match.args, **resolved_match.kwargs)
 
                     if isinstance(response, Response) and hasattr(response, "render"):
                         response.render()
@@ -510,15 +524,19 @@ class DjangoSandboxRunner:
                     return response
 
                 # Step 07.7 - Execute view wrapped inside QueryInterceptor
-                response, queries_captured, db_duration, extra_seeded = self.profile_callable(
-                    _sandbox_execution, setup=_seed
-                )
+                with ProcessLogger.timed_step("sandbox_execution", "Executing view in isolated sandbox"):
+                    response, queries_captured, db_duration, extra_seeded = self.profile_callable(
+                        _sandbox_execution, setup=_seed
+                    )
 
-                seeded_records_info.extend(extra_seeded or [])
-                status_code = getattr(response, "status_code", 200)
-                response_body = QueryAnalysisEngine.parse_response_body(response)
+                    seeded_records_info.extend(extra_seeded or [])
+                    status_code = getattr(response, "status_code", 200)
+                    response_body = QueryAnalysisEngine.parse_response_body(response)
+                    ProcessLogger.log("sandbox_execution", f"View executed: status={status_code}, queries={len(queries_captured)}, db_time={db_duration:.1f}ms",
+                                    status_code=status_code, query_count=len(queries_captured), db_duration_ms=db_duration)
 
             except Exception as e:
+                ProcessLogger.log_error("sandbox_execution", "Exception during sandbox execution", str(e))
                 return ExecutionResult(
                     route=resolved_path,
                     status_code=500,
@@ -529,17 +547,28 @@ class DjangoSandboxRunner:
             total_duration = (time.perf_counter() - start_time) * 1000.0
 
             # Step 07.8 - Format and return execution results
-            return QueryAnalysisEngine.build_result(
-                route=resolved_path,
-                status_code=status_code,
-                queries_captured=queries_captured,
-                db_duration=db_duration,
-                total_duration=total_duration,
-                response_body=response_body,
-                seeded_records_info=seeded_records_info,
-                side_effect_warnings=side_effect_warnings,
-                relationships=relationships,
-            )
+            with ProcessLogger.timed_step("query_analysis", "Analyzing captured queries for N+1 patterns"):
+                result = QueryAnalysisEngine.build_result(
+                    route=resolved_path,
+                    status_code=status_code,
+                    queries_captured=queries_captured,
+                    db_duration=db_duration,
+                    total_duration=total_duration,
+                    response_body=response_body,
+                    seeded_records_info=seeded_records_info,
+                    side_effect_warnings=side_effect_warnings,
+                    relationships=relationships,
+                )
+
+            total_time = (time.perf_counter() - overall_start) * 1000
+            ProcessLogger.log("complete", f"Profiling complete in {total_time:.1f}ms", 
+                            total_duration_ms=total_time, n_plus_one=result.metrics.get("n_plus_one_detected", False))
+
+            # Attach process log to result for API response
+            result.process_log = ProcessLogger.get_log()
+            result.process_log_summary = ProcessLogger.get_summary()
+
+            return result
 
     # =========================================================================
     # Step 08 - Non-HTTP Target Delegators (Signals & Celery Tasks)
