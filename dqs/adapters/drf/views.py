@@ -1,13 +1,12 @@
-import json
 from typing import Any
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.core.serializers.json import DjangoJSONEncoder
-from django.http import HttpResponseForbidden, JsonResponse
-from django.shortcuts import render
-from django.utils.decorators import method_decorator
-from django.views import View
+from rest_framework import status
+from rest_framework.request import Request
+from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from dqs.adapters.drf.execution.runner import DjangoSandboxRunner
 from dqs.adapters.drf.routing.introspector import DjangoIntrospector
@@ -16,24 +15,20 @@ from dqs.adapters.drf.routing.introspector import DjangoIntrospector
 # ---------------------------------------------------------------------------
 # Helpers & Security Guardrails
 # ---------------------------------------------------------------------------
-def require_debug(is_ajax: bool = False):
+def require_debug(view_func):
     """
-    View decorator that short-circuits with HTTP 403 when DEBUG=False.
-    Returns JSON for AJAX endpoints and plain text/HTML for template views.
+    Decorator that short-circuits with HTTP 403 when DEBUG=False.
+    Returns JSON response.
     """
-    def decorator(view_func):
-        def _wrapper(request, *args, **kwargs):
-            if not getattr(settings, "DEBUG", False):
-                msg = (
-                    "Da Profiler is disabled in production. "
-                    "Set DEBUG=True in local settings."
-                )
-                if is_ajax or request.headers.get("x-requested-with") == "XMLHttpRequest":
-                    return JsonResponse({"error": msg}, status=403)
-                return HttpResponseForbidden(msg)
-            return view_func(request, *args, **kwargs)
-        return _wrapper
-    return decorator
+    def _wrapper(self, request, *args, **kwargs):
+        if not getattr(settings, "DEBUG", False):
+            msg = (
+                "Da Profiler is disabled in production. "
+                "Set DEBUG=True in local settings."
+            )
+            return Response({"error": msg}, status=status.HTTP_403_FORBIDDEN)
+        return view_func(self, request, *args, **kwargs)
+    return _wrapper
 
 
 class DQSJSONEncoder(DjangoJSONEncoder):
@@ -55,59 +50,62 @@ class DQSJSONEncoder(DjangoJSONEncoder):
             return repr(obj)
 
 
+def _serialize_route(route) -> dict[str, Any]:
+    """Serialize RouteMetadata to dict."""
+    data = route.__dict__.copy()
+    # Convert path_params to serializable format
+    if "path_params" in data:
+        data["path_params"] = [
+            {"name": p.name, "converter": p.converter} for p in data["path_params"]
+        ]
+    # Remove non-serializable fields
+    data.pop("view_callable", None)
+    return data
+
+
 # ---------------------------------------------------------------------------
-# Views
+# API Views
 # ---------------------------------------------------------------------------
-class DQSDashboardView(View):
-    """Renders the Da Profiler developer dashboard (GET /dqs/)."""
+class DQSDashboardView(APIView):
+    """API endpoint to list all discoverable routes (GET /dqs/)."""
+    authentication_classes = []
+    permission_classes = []
 
-    @method_decorator(require_debug(is_ajax=False))
-    def dispatch(self, request, *args, **kwargs):
-        return super().dispatch(request, *args, **kwargs)
-
-    def get(self, request):
-
+    @require_debug
+    def get(self, request: Request) -> Response:
         try:
             introspector = DjangoIntrospector()
             routes = introspector.list_all_routes()
         except ImproperlyConfigured as exc:
-            return HttpResponseForbidden(str(exc))
+            return Response({"error": str(exc)}, status=status.HTTP_403_FORBIDDEN)
 
-        # Leverage model/dataclass .to_dict() if present, or clean map
-        routes_data = [
-            r.to_dict() if hasattr(r, "to_dict") else r.__dict__ 
-            for r in routes
-        ]
+        routes_data = [_serialize_route(r) for r in routes]
 
-        return render(request, "dqs/dashboard.html", {
+        return Response({
             "routes": routes_data,
-            "routes_json": json.dumps(routes_data, cls=DQSJSONEncoder),
-            "routes_count": len(routes_data),
+            "count": len(routes_data),
         })
 
 
-class DQSProfileView(View):
-    """AJAX profiling endpoint (POST /dqs/profile/)."""
+class DQSProfileView(APIView):
+    """API endpoint to profile a specific route (POST /dqs/profile/)."""
+    authentication_classes = []
+    permission_classes = []
 
-    @method_decorator(require_debug(is_ajax=True))
-    def dispatch(self, request, *args, **kwargs):
-        return super().dispatch(request, *args, **kwargs)
-
-    def post(self, request):
-
-        try:
-            body = json.loads(request.body)
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            return JsonResponse({"error": "Invalid JSON body."}, status=400)
+    @require_debug
+    def post(self, request: Request) -> Response:
+        # DRF parses JSON automatically
+        body = request.data
 
         route = body.get("route")
         if not route:
-            return JsonResponse({"error": "'route' is required."}, status=400)
+            return Response({"error": "'route' is required."}, status=status.HTTP_400_BAD_REQUEST)
 
         method = str(body.get("method", "GET")).upper()
         seed_count = max(0, int(body.get("seed_count") or 0))
         path_params = body.get("path_params") or {}
         target_model = body.get("target_model") or None
+        relationships = body.get("relationships") or None
 
         try:
             runner = DjangoSandboxRunner()
@@ -117,14 +115,37 @@ class DQSProfileView(View):
                 path_params=path_params,
                 seed_count=seed_count,
                 target_model=target_model,
+                relationships=relationships,
             )
         except ImproperlyConfigured as exc:
-            return JsonResponse({"error": str(exc)}, status=403)
+            return Response({"error": str(exc)}, status=status.HTTP_403_FORBIDDEN)
         except Exception as exc:  # noqa: BLE001
-            return JsonResponse(
+            return Response(
                 {"error": f"Sandbox execution failed: {exc}"},
-                status=500,
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-        result_dict = result.to_dict() if hasattr(result, "to_dict") else result.__dict__
-        return JsonResponse(result_dict, encoder=DQSJSONEncoder)
+        # Serialize ExecutionResult
+        result_dict = result.__dict__.copy()
+        return Response(result_dict)
+
+
+class DQSHealthView(APIView):
+    """Health check endpoint (GET /dqs/health/)."""
+    authentication_classes = []
+    permission_classes = []
+
+    @require_debug
+    def get(self, request: Request) -> Response:
+        from dqs.adapters.drf.router import SHADOW_DB_ALIAS
+
+        shadow_configured = SHADOW_DB_ALIAS in getattr(settings, "DATABASES", {})
+        router_configured = "dqs.adapters.drf.router.DQSRouter" in getattr(settings, "DATABASE_ROUTERS", [])
+
+        return Response({
+            "status": "ok",
+            "debug": getattr(settings, "DEBUG", False),
+            "shadow_db_configured": shadow_configured,
+            "router_configured": router_configured,
+            "shadow_db_alias": SHADOW_DB_ALIAS,
+        })
