@@ -1,5 +1,6 @@
 import inspect
 import json
+import os
 import time
 from collections.abc import Callable
 from typing import Any
@@ -48,13 +49,29 @@ class QueryInterceptor:
 
     def _extract_source_location(self) -> str | None:
         """Inspects active call frames to pinpoint the user file and line number triggering the query."""
+        # Normalize exclusion paths for cross-platform compatibility
+        exclude_patterns = [
+            "site-packages",
+            "django" + os.sep,
+            "rest_framework" + os.sep,
+            "dqs" + os.sep + "core" + os.sep,
+            "dqs" + os.sep + "adapters" + os.sep,
+        ]
+        # Also check with forward slash for good measure
+        exclude_patterns.extend([
+            "django/",
+            "rest_framework/",
+            "dqs/core/",
+            "dqs/adapters/",
+        ])
+
         for frame_info in inspect.stack():
             filename = frame_info.filename
             # Filter out framework internals (Django, DRF, DQS runner package itself)
-            if any(pkg in filename for pkg in ["site-packages", "django/", "rest_framework/", "dqs/core/", "dqs/adapters/"]):
+            if any(pkg in filename for pkg in exclude_patterns):
                 continue
             
-            parts = filename.split("/")
+            parts = filename.split(os.sep)
             short_path = "/".join(parts[-2:]) if len(parts) >= 2 else filename
             return f"{short_path}:{frame_info.lineno}"
         return None
